@@ -20,8 +20,8 @@ Native SwiftUI iOS application for Notes with Clerk authentication, AI speech-to
    ```
 
 4. **Configuration (`Notes/App/AppConfig.swift`)**:
-   - `baseURL`: Defaults to `http://localhost:3000` for Simulator. For physical devices, point to your Mac's LAN IP or production server.
-   - `clerkPublishableKey`: Configured with your Clerk Publishable Key.
+   - `baseURL`: `https://notes.kobosh.com`
+   - `clerkPublishableKey`: `pk_live_Y2xlcmsubm90ZXMua29ib3NoLmNvbSQ`
 
 5. **Clerk Authentication**:
    - Uses the official [Clerk iOS SDK](https://github.com/clerk/clerk-ios) (`ClerkKit` and `ClerkKitUI`).
