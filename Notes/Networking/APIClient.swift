@@ -60,6 +60,8 @@ public enum APIClient {
             throw APIError.notSignedIn
         }
 
+        UserDefaults(suiteName: "group.com.kobosh.notes")?.setValue(token, forKey: "clerkToken")
+
         let fullURL = AppConfig.baseURL.appendingPathComponent(path)
         var request = URLRequest(url: fullURL)
         request.httpMethod = method
