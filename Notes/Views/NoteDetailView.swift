@@ -226,10 +226,7 @@ public struct NoteDetailView: View {
                 Divider()
 
                 if let content = note.content, !content.isEmpty {
-                    Text(content)
-                        .font(.body)
-                        .lineSpacing(6)
-                        .padding(.horizontal)
+                    MathMarkdownView(content)
                 } else if note.isProcessing {
                     Text("Note content will appear once processing finishes.")
                         .font(.subheadline)

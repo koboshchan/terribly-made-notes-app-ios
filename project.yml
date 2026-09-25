@@ -9,6 +9,9 @@ packages:
   Clerk:
     url: https://github.com/clerk/clerk-ios
     from: 1.5.0
+  WKMarkdownView:
+    url: https://github.com/weihas/WKMarkdownView.git
+    from: 1.3.1
 
 targets:
   Notes:
@@ -21,6 +24,8 @@ targets:
         product: ClerkKit
       - package: Clerk
         product: ClerkKitUI
+      - package: WKMarkdownView
+        product: WKMarkdownView
     info:
       path: Notes/Info.plist
       properties:
