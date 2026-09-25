@@ -4,7 +4,7 @@ import ClerkKit
 public enum APIError: LocalizedError, Sendable {
     case notSignedIn
     case server(String)
-    case decoding
+    case decoding(String)
     case invalidResponse
     case fileNotFound
 
@@ -14,8 +14,8 @@ public enum APIError: LocalizedError, Sendable {
             return "You are not signed in. Please sign in to continue."
         case .server(let message):
             return message
-        case .decoding:
-            return "Failed to parse data from the server."
+        case .decoding(let message):
+            return "Failed to parse data from the server: \(message)"
         case .invalidResponse:
             return "Unexpected response from the server."
         case .fileNotFound:
@@ -35,6 +35,14 @@ private struct UploadResponse: Decodable {
 
 private struct ChatResponse: Decodable {
     let message: String
+}
+
+private struct LossyItem<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.value = try? container.decode(T.self)
+    }
 }
 
 public enum APIClient {
@@ -73,8 +81,9 @@ public enum APIClient {
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
-            print("Decoding failed for \(T.self): \(error)")
-            throw APIError.decoding
+            let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? ""
+            print("Decoding failed for \(T.self): \(error)\nSnippet: \(bodySnippet)")
+            throw APIError.decoding(error.localizedDescription)
         }
     }
 
@@ -115,7 +124,29 @@ public enum APIClient {
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        return try await send(request)
+        // First attempt standard decoding; fallback to lossy decoding if some items are malformed
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
+                throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
+            }
+
+            if let direct = try? decoder.decode([NoteItem].self, from: data) {
+                return direct
+            }
+
+            if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
+                return lossy.compactMap(\.value)
+            }
+
+            return try decoder.decode([NoteItem].self, from: data)
+        } catch {
+            throw APIError.decoding(error.localizedDescription)
+        }
     }
 
     public static func fetchNote(id: String) async throws -> NoteItem {
@@ -148,7 +179,7 @@ public enum APIClient {
             throw APIError.server("Failed to fetch transcript")
         }
         guard let text = String(data: data, encoding: .utf8) else {
-            throw APIError.decoding
+            throw APIError.decoding("Non-UTF8 string data")
         }
         return text
     }
