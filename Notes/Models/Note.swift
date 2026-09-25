@@ -129,6 +129,34 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
         case duration
     }
 
+    public init(
+        _id: String,
+        title: String,
+        description: String? = nil,
+        content: String? = nil,
+        status: String = "completed",
+        originalFileName: String? = nil,
+        noteClass: String? = nil,
+        error: String? = nil,
+        flashcards: [Flashcard]? = nil,
+        quizQuestions: [QuizQuestion]? = nil,
+        createdAt: String? = nil,
+        duration: Double? = nil
+    ) {
+        self._id = _id
+        self.title = title
+        self.description = description
+        self.content = content
+        self.status = status
+        self.originalFileName = originalFileName
+        self.noteClass = noteClass
+        self.error = error
+        self.flashcards = flashcards
+        self.quizQuestions = quizQuestions
+        self.createdAt = createdAt
+        self.duration = duration
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 

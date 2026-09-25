@@ -5,22 +5,36 @@ public struct NoteDetailView: View {
 
     @State private var note: NoteItem?
     @State private var progress: NoteProgress?
-    @State private var isLoading = true
+    @State private var isLoading: Bool
     @State private var errorMessage: String?
+    @State private var isNetworkUnreachable = false
     @State private var selectedTab = 0
     @State private var isRetrying = false
     @State private var isDeleting = false
     @State private var showDeleteConfirmation = false
     @State private var showClassPicker = false
-    @State private var availableClasses: [UserClass] = []
+    @State private var availableClasses: [UserClass]
     @Environment(\.dismiss) private var dismiss
 
     public init(noteId: String) {
         self.noteId = noteId
+        let cached = LocalDataCache.shared.loadNoteDetail(id: noteId)
+        _note = State(initialValue: cached)
+        _isLoading = State(initialValue: cached == nil)
+        let cachedClasses = LocalDataCache.shared.loadClasses() ?? []
+        _availableClasses = State(initialValue: cachedClasses)
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            if isNetworkUnreachable {
+                NetworkBannerView(
+                    message: "Internet is not reachable",
+                    onRetry: { loadData() }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             if isLoading && note == nil {
                 ProgressView("Loading note...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -111,11 +125,20 @@ public struct NoteDetailView: View {
         } message: {
             Text("Are you sure you want to delete this note? This action cannot be undone.")
         }
+        .refreshable {
+            loadData()
+        }
         .task {
             loadData()
             loadClasses()
             startPollingIfNeeded()
         }
+        .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
+            if isConnected && isNetworkUnreachable {
+                loadData()
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: isNetworkUnreachable)
     }
 
     // MARK: - Subviews
@@ -249,11 +272,24 @@ public struct NoteDetailView: View {
                 await MainActor.run {
                     self.note = fetched
                     self.isLoading = false
+                    self.errorMessage = nil
+                    LocalDataCache.shared.saveNoteDetail(fetched)
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        self.isNetworkUnreachable = false
+                    }
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = error.localizedDescription
                     self.isLoading = false
+                    let isNetwork = (error as? APIError)?.isNetworkError == true || (error as? URLError) != nil || !NetworkMonitor.shared.isConnected
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        if isNetwork || self.note != nil {
+                            self.isNetworkUnreachable = true
+                        }
+                    }
+                    if self.note == nil {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
@@ -264,6 +300,7 @@ public struct NoteDetailView: View {
             if let classes = try? await APIClient.fetchClasses() {
                 await MainActor.run {
                     self.availableClasses = classes
+                    LocalDataCache.shared.saveClasses(classes)
                 }
             }
         }
@@ -283,6 +320,7 @@ public struct NoteDetailView: View {
                 if let updatedNote = try? await APIClient.fetchNote(id: noteId) {
                     await MainActor.run {
                         self.note = updatedNote
+                        LocalDataCache.shared.saveNoteDetail(updatedNote)
                     }
                     if !updatedNote.isProcessing {
                         break
@@ -331,6 +369,7 @@ public struct NoteDetailView: View {
         Task {
             do {
                 try await APIClient.deleteNote(id: noteId)
+                LocalDataCache.shared.removeNote(id: noteId)
                 await MainActor.run {
                     dismiss()
                 }

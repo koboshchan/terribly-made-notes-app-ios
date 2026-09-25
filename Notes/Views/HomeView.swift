@@ -2,66 +2,90 @@ import SwiftUI
 import ClerkKitUI
 
 public struct HomeView: View {
-    @State private var notes: [NoteItem] = []
-    @State private var classes: [UserClass] = []
+    @State private var notes: [NoteItem]
+    @State private var classes: [UserClass]
     @State private var selectedClassFilter: String = "All"
     @State private var searchText = ""
-    @State private var isLoading = true
+    @State private var isLoading: Bool
     @State private var errorMessage: String?
+    @State private var isNetworkUnreachable = false
     @State private var showRecordSheet = false
     @State private var showClassesSheet = false
     @State private var retryingNoteIds: Set<String> = []
     @State private var noteToAssignClass: NoteItem?
+    @State private var showAssignClassDialog = false
 
-    public init() {}
+    public init() {
+        let cachedNotes = LocalDataCache.shared.loadNotes() ?? []
+        let cachedClasses = LocalDataCache.shared.loadClasses() ?? []
+        _notes = State(initialValue: cachedNotes)
+        _classes = State(initialValue: cachedClasses)
+        _isLoading = State(initialValue: cachedNotes.isEmpty)
+    }
 
     public var body: some View {
         NavigationStack {
-            List {
-                if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                }
-
-                if filteredNotes.isEmpty && !isLoading {
-                    ContentUnavailableView(
-                        searchText.isEmpty ? "No Notes Found" : "No Matching Notes",
-                        systemImage: searchText.isEmpty ? "note.text.badge.plus" : "magnifyingglass",
-                        description: Text(searchText.isEmpty ? "Record or import an audio file to create your first note." : "Try a different search term or class filter.")
+            VStack(spacing: 0) {
+                if isNetworkUnreachable {
+                    NetworkBannerView(
+                        message: "Internet is not reachable",
+                        onRetry: {
+                            Task {
+                                await refreshAllData()
+                            }
+                        }
                     )
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
-                ForEach(filteredNotes) { note in
-                    NavigationLink(value: note.id) {
-                        noteRow(note: note)
+                List {
+                    if let errorMessage, notes.isEmpty {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
                     }
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            deleteNote(note)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
 
-                        if !classes.isEmpty {
-                            Button {
-                                noteToAssignClass = note
-                            } label: {
-                                Label("Class", systemImage: "folder")
-                            }
-                            .tint(.blue)
-                        }
+                    if filteredNotes.isEmpty && !isLoading {
+                        ContentUnavailableView(
+                            searchText.isEmpty ? "No Notes Found" : "No Matching Notes",
+                            systemImage: searchText.isEmpty ? "note.text.badge.plus" : "magnifyingglass",
+                            description: Text(searchText.isEmpty ? "Record or import an audio file to create your first note." : "Try a different search term or class filter.")
+                        )
+                    }
 
-                        if note.isError {
-                            Button {
-                                retryNote(note)
+                    ForEach(filteredNotes) { note in
+                        NavigationLink(value: note.id) {
+                            noteRow(note: note)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                deleteNote(note)
                             } label: {
-                                Label("Retry", systemImage: "arrow.clockwise")
+                                Label("Delete", systemImage: "trash")
                             }
-                            .tint(.green)
+
+                            if !classes.isEmpty {
+                                Button {
+                                    noteToAssignClass = note
+                                    showAssignClassDialog = true
+                                } label: {
+                                    Label("Class", systemImage: "folder")
+                                }
+                                .tint(.blue)
+                            }
+
+                            if note.isError {
+                                Button {
+                                    retryNote(note)
+                                } label: {
+                                    Label("Retry", systemImage: "arrow.clockwise")
+                                }
+                                .tint(.green)
+                            }
                         }
                     }
                 }
             }
+            .animation(.easeInOut(duration: 0.25), value: isNetworkUnreachable)
             .navigationDestination(for: String.self) { noteId in
                 NoteDetailView(noteId: noteId)
             }
@@ -100,29 +124,30 @@ public struct HomeView: View {
                                 }
                             }
                         }
-
-                        Divider()
-
-                        Button {
-                            showClassesSheet = true
-                        } label: {
-                            Label("Manage Classes...", systemImage: "folder.badge.gearshape")
-                        }
                     } label: {
                         Image(systemName: selectedClassFilter == "All" ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
 
-                    // New Note Button
+                    // Classes Manager
+                    Button {
+                        showClassesSheet = true
+                    } label: {
+                        Image(systemName: "folder")
+                    }
+
+                    // Record Note
                     Button {
                         showRecordSheet = true
                     } label: {
-                        Label("New Note", systemImage: "plus")
+                        Image(systemName: "mic.badge.plus")
                     }
                 }
             }
             .sheet(isPresented: $showRecordSheet) {
                 RecordNoteView { _ in
-                    loadData()
+                    Task {
+                        await refreshAllData()
+                    }
                 }
             }
             .sheet(isPresented: $showClassesSheet) {
@@ -130,33 +155,33 @@ public struct HomeView: View {
             }
             .confirmationDialog(
                 "Assign Class",
-                isPresented: Binding(
-                    get: { noteToAssignClass != nil },
-                    set: { if !$0 { noteToAssignClass = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
+                isPresented: $showAssignClassDialog,
+                titleVisibility: .visible,
+                presenting: noteToAssignClass
+            ) { note in
                 Button("None (Remove Class)") {
-                    if let note = noteToAssignClass {
-                        assignClass(note: note, className: nil)
-                    }
+                    assignClass(note: note, className: nil)
                 }
                 ForEach(classes) { cls in
                     Button(cls.name) {
-                        if let note = noteToAssignClass {
-                            assignClass(note: note, className: cls.name)
-                        }
+                        assignClass(note: note, className: cls.name)
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             }
             .refreshable {
-                loadData()
+                await refreshAllData()
             }
             .task {
-                loadData()
-                loadClasses()
+                await refreshAllData()
                 startBackgroundPolling()
+            }
+            .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
+                if isConnected && isNetworkUnreachable {
+                    Task {
+                        await refreshAllData()
+                    }
+                }
             }
         }
     }
@@ -228,6 +253,8 @@ public struct HomeView: View {
                         .clipShape(.capsule)
                     }
                     .buttonStyle(.plain)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
                     .disabled(retryingNoteIds.contains(note.id))
                 }
             }
@@ -274,31 +301,40 @@ public struct HomeView: View {
         }
     }
 
-    // MARK: - API Calls
+    // MARK: - API Calls & Refresh
 
-    private func loadData() {
-        Task {
-            do {
-                let fetched = try await APIClient.fetchNotes()
-                await MainActor.run {
-                    self.notes = fetched
-                    self.isLoading = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
+    @MainActor
+    private func refreshAllData() async {
+        do {
+            async let fetchedNotesTask = APIClient.fetchNotes()
+            async let fetchedClassesTask = APIClient.fetchClasses()
+
+            let (fetchedNotes, fetchedClasses) = try await (fetchedNotesTask, fetchedClassesTask)
+
+            self.notes = fetchedNotes
+            self.classes = fetchedClasses
+            self.isLoading = false
+            self.errorMessage = nil
+
+            // Persist to local cache for instant cold start
+            LocalDataCache.shared.saveNotes(fetchedNotes)
+            LocalDataCache.shared.saveClasses(fetchedClasses)
+
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.isNetworkUnreachable = false
+            }
+        } catch {
+            self.isLoading = false
+            let isNetwork = (error as? APIError)?.isNetworkError == true || (error as? URLError) != nil || !NetworkMonitor.shared.isConnected
+
+            withAnimation(.easeInOut(duration: 0.25)) {
+                if isNetwork || notes.isEmpty {
+                    self.isNetworkUnreachable = true
                 }
             }
-        }
-    }
 
-    private func loadClasses() {
-        Task {
-            if let fetchedClasses = try? await APIClient.fetchClasses() {
-                await MainActor.run {
-                    self.classes = fetchedClasses
-                }
+            if notes.isEmpty {
+                self.errorMessage = error.localizedDescription
             }
         }
     }
@@ -307,11 +343,12 @@ public struct HomeView: View {
         Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
-                let hasProcessing = notes.contains { $0.isProcessing }
+                let hasProcessing = await MainActor.run { notes.contains { $0.isProcessing } }
                 if hasProcessing {
                     if let updatedNotes = try? await APIClient.fetchNotes() {
                         await MainActor.run {
                             self.notes = updatedNotes
+                            LocalDataCache.shared.saveNotes(updatedNotes)
                         }
                     }
                 }
@@ -325,6 +362,7 @@ public struct HomeView: View {
                 try await APIClient.deleteNote(id: note.id)
                 await MainActor.run {
                     self.notes.removeAll { $0.id == note.id }
+                    LocalDataCache.shared.removeNote(id: note.id)
                 }
             } catch {
                 await MainActor.run {
@@ -339,14 +377,14 @@ public struct HomeView: View {
         Task {
             do {
                 try await APIClient.retryNote(id: note.id)
-                loadData()
+                await refreshAllData()
                 await MainActor.run {
-                    self.retryingNoteIds.remove(note.id)
+                    _ = self.retryingNoteIds.remove(note.id)
                 }
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
-                    self.retryingNoteIds.remove(note.id)
+                    _ = self.retryingNoteIds.remove(note.id)
                 }
             }
         }
@@ -356,7 +394,7 @@ public struct HomeView: View {
         Task {
             do {
                 try await APIClient.updateNoteClass(id: note.id, noteClass: className)
-                loadData()
+                await refreshAllData()
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription

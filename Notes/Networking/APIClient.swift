@@ -3,6 +3,7 @@ import ClerkKit
 
 public enum APIError: LocalizedError, Sendable {
     case notSignedIn
+    case network(String)
     case server(String)
     case decoding(String)
     case invalidResponse
@@ -12,6 +13,8 @@ public enum APIError: LocalizedError, Sendable {
         switch self {
         case .notSignedIn:
             return "You are not signed in. Please sign in to continue."
+        case .network(let message):
+            return "Internet is not reachable: \(message)"
         case .server(let message):
             return message
         case .decoding(let message):
@@ -21,6 +24,11 @@ public enum APIError: LocalizedError, Sendable {
         case .fileNotFound:
             return "The selected audio file could not be read."
         }
+    }
+
+    public var isNetworkError: Bool {
+        if case .network = self { return true }
+        return false
     }
 }
 
@@ -70,7 +78,15 @@ public enum APIClient {
     }
 
     private static func send<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let urlErr as URLError {
+            throw APIError.network(urlErr.localizedDescription)
+        } catch {
+            throw APIError.network(error.localizedDescription)
+        }
+
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
@@ -90,7 +106,15 @@ public enum APIClient {
     }
 
     private static func sendVoid(_ request: URLRequest) async throws {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let urlErr as URLError {
+            throw APIError.network(urlErr.localizedDescription)
+        } catch {
+            throw APIError.network(error.localizedDescription)
+        }
+
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
@@ -126,25 +150,32 @@ public enum APIClient {
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-        // First attempt standard decoding; fallback to lossy decoding if some items are malformed
+        let (data, response): (Data, URLResponse)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw APIError.invalidResponse
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-                throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-            }
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let urlErr as URLError {
+            throw APIError.network(urlErr.localizedDescription)
+        } catch {
+            throw APIError.network(error.localizedDescription)
+        }
 
-            if let direct = try? decoder.decode([NoteItem].self, from: data) {
-                return direct
-            }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
+            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
+        }
 
-            if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
-                return lossy.compactMap(\.value)
-            }
+        if let direct = try? decoder.decode([NoteItem].self, from: data) {
+            return direct
+        }
 
+        if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
+            return lossy.compactMap(\.value)
+        }
+
+        do {
             return try decoder.decode([NoteItem].self, from: data)
         } catch {
             throw APIError.decoding(error.localizedDescription)
