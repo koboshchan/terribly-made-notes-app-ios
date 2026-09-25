@@ -1,0 +1,9 @@
+<svg role="img" width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <title>Audio recording waveform bars</title>
+  <!-- 5 Audio waveform bars centered optically around x=512, y=380 -->
+  <rect x="394" y="335" width="36" height="90" rx="18" fill="#FF5A36"/>
+  <rect x="444" y="300" width="36" height="160" rx="18" fill="#FF5A36"/>
+  <rect x="494" y="270" width="36" height="220" rx="18" fill="#FF5A36"/>
+  <rect x="544" y="300" width="36" height="160" rx="18" fill="#FF5A36"/>
+  <rect x="594" y="335" width="36" height="90" rx="18" fill="#FF5A36"/>
+</svg>

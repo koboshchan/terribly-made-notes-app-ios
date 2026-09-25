@@ -19,6 +19,7 @@ targets:
     platform: iOS
     sources:
       - path: Notes
+      - path: Notes.icon
     dependencies:
       - package: Clerk
         product: ClerkKit
@@ -37,6 +38,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobosh.notes
+        ASSETCATALOG_COMPILER_APPICON_NAME: Notes
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "1.0"

@@ -1,0 +1,10 @@
+<svg role="img" width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <title>Note page sheet with note lines</title>
+  <!-- Main white note sheet -->
+  <rect x="232" y="192" width="560" height="640" rx="84" fill="#FFFFFF"/>
+  <!-- Ruled note lines using translucent tint that adapts naturally to light and dark modes -->
+  <rect x="304" y="556" width="416" height="24" rx="12" fill="#000000" opacity="0.07"/>
+  <rect x="304" y="612" width="416" height="24" rx="12" fill="#000000" opacity="0.07"/>
+  <rect x="304" y="668" width="416" height="24" rx="12" fill="#000000" opacity="0.07"/>
+  <rect x="304" y="724" width="260" height="24" rx="12" fill="#000000" opacity="0.07"/>
+</svg>
