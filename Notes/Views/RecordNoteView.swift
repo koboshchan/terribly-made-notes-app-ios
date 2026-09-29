@@ -10,6 +10,8 @@ public struct RecordNoteView: View {
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlaying = false
     @State private var recordDuration: TimeInterval = 0
+    @State private var recordingStartTime: Date?
+    @State private var accumulatedDuration: TimeInterval = 0
     @State private var timer: Timer?
 
     @State private var selectedLanguage = "english"
@@ -22,6 +24,7 @@ public struct RecordNoteView: View {
     @State private var errorMessage: String?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     public init(onNoteCreated: @escaping (String) -> Void) {
         self.onNoteCreated = onNoteCreated
@@ -214,6 +217,22 @@ public struct RecordNoteView: View {
                     availableClasses = classes
                 }
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active, isRecording, let start = recordingStartTime {
+                    recordDuration = accumulatedDuration + Date().timeIntervalSince(start)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
+                handleAudioInterruption(notification: notification)
+            }
+            .onDisappear {
+                if isRecording {
+                    stopRecording()
+                }
+                audioPlayer?.stop()
+                audioPlayer = nil
+                isPlaying = false
+            }
         }
     }
 
@@ -222,7 +241,7 @@ public struct RecordNoteView: View {
     private func startRecording() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
             try session.setActive(true)
         } catch {
             errorMessage = "Audio session setup failed: \(error.localizedDescription)"
@@ -252,27 +271,51 @@ public struct RecordNoteView: View {
         ]
 
         do {
-            audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
-            audioRecorder?.record()
+            let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
+            guard recorder.record() else {
+                errorMessage = "Failed to start audio recording"
+                return
+            }
+
+            audioRecorder = recorder
             recordedURL = fileURL
             isRecording = true
+            accumulatedDuration = 0
+            recordingStartTime = Date()
             recordDuration = 0
             errorMessage = nil
 
-            timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-                recordDuration += 1
-            }
+            startTimer()
         } catch {
             errorMessage = "Failed to start recording: \(error.localizedDescription)"
         }
     }
 
+    private func startTimer() {
+        timer?.invalidate()
+        let t = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            if let start = recordingStartTime {
+                recordDuration = accumulatedDuration + Date().timeIntervalSince(start)
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
     private func stopRecording() {
+        if let start = recordingStartTime {
+            accumulatedDuration += Date().timeIntervalSince(start)
+            recordingStartTime = nil
+        }
+        recordDuration = accumulatedDuration
+
         audioRecorder?.stop()
         audioRecorder = nil
         timer?.invalidate()
         timer = nil
         isRecording = false
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private func resetRecording() {
@@ -281,7 +324,42 @@ public struct RecordNoteView: View {
         audioPlayer = nil
         isPlaying = false
         recordDuration = 0
+        accumulatedDuration = 0
+        recordingStartTime = nil
         recordedURL = nil
+    }
+
+    private func handleAudioInterruption(notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            if isRecording {
+                audioRecorder?.pause()
+                if let start = recordingStartTime {
+                    accumulatedDuration += Date().timeIntervalSince(start)
+                    recordingStartTime = nil
+                }
+                timer?.invalidate()
+                timer = nil
+            }
+        case .ended:
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume), isRecording {
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    audioRecorder?.record()
+                    recordingStartTime = Date()
+                    startTimer()
+                }
+            }
+        @unknown default:
+            break
+        }
     }
 
     private func togglePlayback(url: URL) {
