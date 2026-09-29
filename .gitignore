@@ -10,6 +10,7 @@ DerivedData/
 .build/
 .spm/
 *.ipa
+*.zip
 *.dSYM
 *.dSYM.zip
 build/

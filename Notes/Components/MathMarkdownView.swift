@@ -6,18 +6,37 @@ import WKMarkdownView
 public struct MathMarkdownView: View {
     private let rawMarkdown: String
     private let normalizedMarkdown: String
-    @State private var contentHeight: CGFloat = 120
+    private let isCentered: Bool
+    private let fontSize: CGFloat?
+    private let allowsInteraction: Bool
+    private let showLoadingPlaceholder: Bool
+    @State private var contentHeight: CGFloat
     @State private var hasRendered = false
 
-    public init(_ markdown: String) {
+    public init(
+        _ markdown: String,
+        isCentered: Bool = false,
+        fontSize: CGFloat? = nil,
+        allowsInteraction: Bool = true,
+        showLoadingPlaceholder: Bool = true,
+        initialHeight: CGFloat = 120
+    ) {
         self.rawMarkdown = markdown
         self.normalizedMarkdown = MarkdownNormalizer.normalize(markdown)
+        self.isCentered = isCentered
+        self.fontSize = fontSize
+        self.allowsInteraction = allowsInteraction
+        self.showLoadingPlaceholder = showLoadingPlaceholder
+        _contentHeight = State(initialValue: initialHeight)
     }
 
     public var body: some View {
         ZStack(alignment: .top) {
             MathMarkdownWebView(
                 markdown: normalizedMarkdown,
+                isCentered: isCentered,
+                fontSize: fontSize,
+                allowsInteraction: allowsInteraction,
                 contentHeight: $contentHeight,
                 hasRendered: $hasRendered
             )
@@ -25,14 +44,21 @@ public struct MathMarkdownView: View {
             .opacity(hasRendered ? 1 : 0)
 
             if !hasRendered {
-                HStack(spacing: 10) {
+                if showLoadingPlaceholder {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Rendering notes & math...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                } else {
                     ProgressView()
-                    Text("Rendering notes & math...")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
             }
         }
         .animation(.easeOut(duration: 0.15), value: hasRendered)
@@ -41,6 +67,9 @@ public struct MathMarkdownView: View {
 
 private struct MathMarkdownWebView: UIViewRepresentable {
     let markdown: String
+    let isCentered: Bool
+    let fontSize: CGFloat?
+    let allowsInteraction: Bool
     @Binding var contentHeight: CGFloat
     @Binding var hasRendered: Bool
 
@@ -56,17 +85,25 @@ private struct MathMarkdownWebView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.isUserInteractionEnabled = allowsInteraction
         context.coordinator.setup(webView: webView)
         return webView
     }
 
     func updateUIView(_ webView: WKMarkdownView, context: Context) {
+        webView.isUserInteractionEnabled = allowsInteraction
         guard context.coordinator.lastRenderedMarkdown != markdown else { return }
         context.coordinator.lastRenderedMarkdown = markdown
 
         Task { @MainActor in
             do {
                 try await webView.updateMarkdown(markdown)
+                if isCentered {
+                    _ = try? await webView.evaluateJavaScript("document.body.style.textAlign = 'center';")
+                }
+                if let fontSize = fontSize {
+                    _ = try? await webView.evaluateJavaScript("document.body.style.fontSize = '\(fontSize)px';")
+                }
                 let height = try await webView.contentHeight()
                 if height > 0 {
                     self.contentHeight = CGFloat(height)
@@ -94,13 +131,12 @@ private struct MathMarkdownWebView: UIViewRepresentable {
         }
 
         // Open external links in Safari
-        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
             if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url {
-                UIApplication.shared.open(url)
-                decisionHandler(.cancel)
-            } else {
-                decisionHandler(.allow)
+                await UIApplication.shared.open(url)
+                return .cancel
             }
+            return .allow
         }
     }
 }

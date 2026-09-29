@@ -28,7 +28,7 @@ public struct FlashcardsView: View {
                     Spacer()
 
                     Button {
-                        withAnimation {
+                        withAnimation(.spring(duration: 0.35)) {
                             cards.shuffle()
                             currentIndex = 0
                             isFlipped = false
@@ -44,40 +44,24 @@ public struct FlashcardsView: View {
                 // Flashcard presentation
                 let card = cards[currentIndex]
 
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(uiColor: .secondarySystemBackground))
-                        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
-
-                    VStack(spacing: 16) {
-                        Text(isFlipped ? "ANSWER" : "QUESTION")
-                            .font(.caption.bold())
-                            .foregroundStyle(isFlipped ? .green : .blue)
-                            .tracking(1.5)
-
-                        ScrollView {
-                            Text(isFlipped ? card.back : card.front)
-                                .font(.title3)
-                                .fontWeight(.medium)
-                                .multilineTextAlignment(.center)
-                                .padding()
-                        }
-
-                        Text("Tap to flip")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(24)
+                FlipCardView(isFlipped: isFlipped) {
+                    cardFace(
+                        title: "QUESTION",
+                        titleColor: .blue,
+                        content: card.front
+                    )
+                } back: {
+                    cardFace(
+                        title: "ANSWER",
+                        titleColor: .green,
+                        content: card.back
+                    )
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 320)
+                .id(currentIndex)
                 .padding(.horizontal)
-                .rotation3DEffect(
-                    .degrees(isFlipped ? 180 : 0),
-                    axis: (x: 0.0, y: 1.0, z: 0.0)
-                )
+                .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(duration: 0.4)) {
+                    withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
                         isFlipped.toggle()
                     }
                 }
@@ -86,7 +70,7 @@ public struct FlashcardsView: View {
                 HStack(spacing: 40) {
                     Button {
                         if currentIndex > 0 {
-                            withAnimation {
+                            withAnimation(.easeInOut(duration: 0.25)) {
                                 currentIndex -= 1
                                 isFlipped = false
                             }
@@ -98,7 +82,7 @@ public struct FlashcardsView: View {
                     .disabled(currentIndex == 0)
 
                     Button {
-                        withAnimation(.spring(duration: 0.4)) {
+                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
                             isFlipped.toggle()
                         }
                     } label: {
@@ -110,7 +94,7 @@ public struct FlashcardsView: View {
 
                     Button {
                         if currentIndex < cards.count - 1 {
-                            withAnimation {
+                            withAnimation(.easeInOut(duration: 0.25)) {
                                 currentIndex += 1
                                 isFlipped = false
                             }
@@ -129,6 +113,82 @@ public struct FlashcardsView: View {
         .padding(.vertical)
         .onAppear {
             cards = flashcards
+        }
+    }
+
+    @ViewBuilder
+    private func cardFace(title: String, titleColor: Color, content: String) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(uiColor: .secondarySystemBackground))
+                .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
+
+            VStack(spacing: 12) {
+                Text(title)
+                    .font(.caption.bold())
+                    .foregroundStyle(titleColor)
+                    .tracking(1.5)
+
+                ScrollView {
+                    VStack {
+                        Spacer(minLength: 0)
+
+                        MathMarkdownView(
+                            content,
+                            isCentered: true,
+                            fontSize: 19,
+                            allowsInteraction: false,
+                            showLoadingPlaceholder: false,
+                            initialHeight: 80
+                        )
+                        .padding(.horizontal, 8)
+
+                        Spacer(minLength: 0)
+                    }
+                    .frame(minHeight: 180)
+                }
+
+                Text("Tap to flip")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 320)
+    }
+}
+
+// MARK: - 3D Flip Card Container
+
+private struct FlipCardView<Front: View, Back: View>: View {
+    let isFlipped: Bool
+    @ViewBuilder let front: () -> Front
+    @ViewBuilder let back: () -> Back
+
+    var body: some View {
+        ZStack {
+            front()
+                .rotation3DEffect(
+                    .degrees(isFlipped ? 180 : 0),
+                    axis: (x: 0.0, y: 1.0, z: 0.0),
+                    perspective: 0.5
+                )
+                .opacity(isFlipped ? 0 : 1)
+                .animation(.linear(duration: 0.001).delay(0.2), value: isFlipped)
+                .allowsHitTesting(!isFlipped)
+                .accessibilityHidden(isFlipped)
+
+            back()
+                .rotation3DEffect(
+                    .degrees(isFlipped ? 0 : -180),
+                    axis: (x: 0.0, y: 1.0, z: 0.0),
+                    perspective: 0.5
+                )
+                .opacity(isFlipped ? 1 : 0)
+                .animation(.linear(duration: 0.001).delay(0.2), value: isFlipped)
+                .allowsHitTesting(isFlipped)
+                .accessibilityHidden(!isFlipped)
         }
     }
 }
