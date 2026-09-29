@@ -8,6 +8,7 @@ public struct MathMarkdownView: View {
     private let normalizedMarkdown: String
     private let isCentered: Bool
     private let fontSize: CGFloat?
+    private let customPadding: String?
     private let allowsInteraction: Bool
     private let showLoadingPlaceholder: Bool
     @State private var contentHeight: CGFloat
@@ -17,6 +18,7 @@ public struct MathMarkdownView: View {
         _ markdown: String,
         isCentered: Bool = false,
         fontSize: CGFloat? = nil,
+        customPadding: String? = nil,
         allowsInteraction: Bool = true,
         showLoadingPlaceholder: Bool = true,
         initialHeight: CGFloat = 120
@@ -25,6 +27,7 @@ public struct MathMarkdownView: View {
         self.normalizedMarkdown = MarkdownNormalizer.normalize(markdown)
         self.isCentered = isCentered
         self.fontSize = fontSize
+        self.customPadding = customPadding
         self.allowsInteraction = allowsInteraction
         self.showLoadingPlaceholder = showLoadingPlaceholder
         _contentHeight = State(initialValue: initialHeight)
@@ -36,29 +39,23 @@ public struct MathMarkdownView: View {
                 markdown: normalizedMarkdown,
                 isCentered: isCentered,
                 fontSize: fontSize,
+                customPadding: customPadding,
                 allowsInteraction: allowsInteraction,
                 contentHeight: $contentHeight,
                 hasRendered: $hasRendered
             )
-            .frame(height: max(contentHeight, 40))
+            .frame(height: max(contentHeight, 36))
             .opacity(hasRendered ? 1 : 0)
 
-            if !hasRendered {
-                if showLoadingPlaceholder {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Rendering notes & math...")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                } else {
+            if !hasRendered && showLoadingPlaceholder {
+                HStack(spacing: 10) {
                     ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding()
+                    Text("Rendering notes & math...")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
             }
         }
         .animation(.easeOut(duration: 0.15), value: hasRendered)
@@ -69,6 +66,7 @@ private struct MathMarkdownWebView: UIViewRepresentable {
     let markdown: String
     let isCentered: Bool
     let fontSize: CGFloat?
+    let customPadding: String?
     let allowsInteraction: Bool
     @Binding var contentHeight: CGFloat
     @Binding var hasRendered: Bool
@@ -104,11 +102,18 @@ private struct MathMarkdownWebView: UIViewRepresentable {
                 if let fontSize = fontSize {
                     _ = try? await webView.evaluateJavaScript("document.body.style.fontSize = '\(fontSize)px';")
                 }
-                let height = try await webView.contentHeight()
+                if let customPadding = customPadding {
+                    _ = try? await webView.evaluateJavaScript("const c = document.getElementById('markdown-content'); if (c) c.style.padding = '\(customPadding)';")
+                }
+                var height = try await webView.contentHeight()
+                if height <= 0 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    height = try await webView.contentHeight()
+                }
                 if height > 0 {
                     self.contentHeight = CGFloat(height)
-                    self.hasRendered = true
                 }
+                self.hasRendered = true
             } catch {
                 print("MathMarkdownView rendering error: \(error)")
                 self.hasRendered = true

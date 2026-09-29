@@ -34,21 +34,22 @@ public struct AskAIView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 14) {
+                        VStack(spacing: 14) {
                             ForEach(messages) { msg in
                                 chatBubble(message: msg)
                             }
 
                             if isLoading {
-                                HStack {
+                                HStack(spacing: 8) {
                                     ProgressView()
-                                        .padding(.trailing, 6)
-                                    Text("Thinking...")
+                                        .controlSize(.small)
+                                    Text("AI is thinking...")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                     Spacer()
                                 }
-                                .padding(.horizontal)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
                                 .id("loading_bubble")
                             }
                         }
@@ -56,14 +57,22 @@ public struct AskAIView: View {
                     }
                     .onChange(of: messages.count) { _, _ in
                         if let last = messages.last {
-                            withAnimation {
+                            withAnimation(.easeOut(duration: 0.25)) {
                                 proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                            Task {
+                                try? await Task.sleep(nanoseconds: 200_000_000)
+                                await MainActor.run {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        proxy.scrollTo(last.id, anchor: .bottom)
+                                    }
+                                }
                             }
                         }
                     }
                     .onChange(of: isLoading) { _, loading in
                         if loading {
-                            withAnimation {
+                            withAnimation(.easeOut(duration: 0.25)) {
                                 proxy.scrollTo("loading_bubble", anchor: .bottom)
                             }
                         }
@@ -102,23 +111,56 @@ public struct AskAIView: View {
     }
 
     private func chatBubble(message: ChatMessage) -> some View {
-        HStack {
+        HStack(alignment: .bottom, spacing: 8) {
             if message.isUser {
                 Spacer(minLength: 40)
-                Text(message.content)
+                Text(LocalizedStringKey(message.content))
                     .font(.body)
-                    .padding(12)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                     .background(Color.blue)
                     .foregroundStyle(.white)
                     .clipShape(.rect(cornerRadius: 16))
+                    .contextMenu {
+                        Button {
+                            UIPasteboard.general.string = message.content
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                    }
             } else {
-                Text(message.content)
-                    .font(.body)
-                    .padding(12)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.blue)
+                        .frame(width: 26, height: 26)
+                        .background(Color.blue.opacity(0.12))
+                        .clipShape(Circle())
+                        .padding(.top, 4)
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        MathMarkdownView(
+                            message.content,
+                            fontSize: 15,
+                            customPadding: "0",
+                            allowsInteraction: true,
+                            showLoadingPlaceholder: false,
+                            initialHeight: 40
+                        )
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                     .background(Color(uiColor: .secondarySystemBackground))
-                    .foregroundStyle(.primary)
                     .clipShape(.rect(cornerRadius: 16))
-                Spacer(minLength: 40)
+                    .contextMenu {
+                        Button {
+                            UIPasteboard.general.string = message.content
+                        } label: {
+                            Label("Copy Markdown", systemImage: "doc.on.doc")
+                        }
+                    }
+                }
+                Spacer(minLength: 20)
             }
         }
         .id(message.id)
