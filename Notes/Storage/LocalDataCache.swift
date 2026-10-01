@@ -12,6 +12,24 @@ public final class LocalDataCache: @unchecked Sendable {
     private let lock = NSLock()
     private var scopeKey: String?
 
+    /// Bump when the on-disk format or merge semantics change; older files are ignored.
+    static let schemaVersion = 2
+
+    private struct Envelope<T: Codable>: Codable {
+        let version: Int
+        let savedAt: Date
+        let value: T
+    }
+
+    private func encode<T: Codable>(_ value: T) -> Data? {
+        try? encoder.encode(Envelope(version: Self.schemaVersion, savedAt: Date(), value: value))
+    }
+
+    private func decode<T: Codable>(_ type: T.Type, from data: Data) -> T? {
+        guard let env = try? decoder.decode(Envelope<T>.self, from: data), env.version == Self.schemaVersion else { return nil }
+        return env.value
+    }
+
     private static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
 
     private init() {
@@ -81,23 +99,22 @@ public final class LocalDataCache: @unchecked Sendable {
         guard let url = notesFileURL, let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return try? decoder.decode([NoteItem].self, from: data)
+        return decode([NoteItem].self, from: data)
     }
 
+    /// Saves the authoritative server list. Detail files for notes that no
+    /// longer exist (deleted on the web or another device) are removed.
     public func saveNotes(_ notes: [NoteItem]) {
-        guard let url = notesFileURL, let data = try? encoder.encode(notes) else { return }
+        guard let url = notesFileURL, let data = encode(notes) else { return }
         try? data.write(to: url, options: Self.writeOptions)
+        reconcileDetails(keeping: Set(notes.map(\.id)))
 
-        // Also update individual cached details for fast offline access
+        // The list endpoint returns full note documents, so each entry is
+        // authoritative: replace the detail rather than merging, otherwise a
+        // field the server cleared (error after a retry, removed class) would
+        // be resurrected from the old copy.
         for note in notes {
-            // Only update detail cache if we don't already have richer detail or to keep basic metadata current
-            if let existing = loadNoteDetail(id: note.id) {
-                // If existing has richer content (e.g. flashcards or quizzes), preserve it unless note has it
-                let merged = mergeNote(existing: existing, incoming: note)
-                saveNoteDetail(merged)
-            } else {
-                saveNoteDetail(note)
-            }
+            saveNoteDetail(note)
         }
     }
 
@@ -111,11 +128,11 @@ public final class LocalDataCache: @unchecked Sendable {
         guard let url = classesFileURL, let data = try? Data(contentsOf: url) else {
             return nil
         }
-        return try? decoder.decode([UserClass].self, from: data)
+        return decode([UserClass].self, from: data)
     }
 
     public func saveClasses(_ classes: [UserClass]) {
-        guard let url = classesFileURL, let data = try? encoder.encode(classes) else { return }
+        guard let url = classesFileURL, let data = encode(classes) else { return }
         try? data.write(to: url, options: Self.writeOptions)
     }
 
@@ -133,11 +150,13 @@ public final class LocalDataCache: @unchecked Sendable {
         guard let file = detailFileURL(id: id), let data = try? Data(contentsOf: file) else {
             return nil
         }
-        return try? decoder.decode(NoteItem.self, from: data)
+        return decode(NoteItem.self, from: data)
     }
 
+    /// Stores a full note from the detail endpoint, replacing (not merging)
+    /// what was cached, so fields the server cleared are cleared here too.
     public func saveNoteDetail(_ note: NoteItem) {
-        guard let file = detailFileURL(id: note.id), let data = try? encoder.encode(note) else { return }
+        guard let file = detailFileURL(id: note.id), let data = encode(note) else { return }
         try? data.write(to: file, options: Self.writeOptions)
     }
 
@@ -150,35 +169,32 @@ public final class LocalDataCache: @unchecked Sendable {
             cachedNotes.removeAll { $0.id == id }
             saveNotes(cachedNotes)
         }
+        if let t = transcriptFileURL(id: id) { try? FileManager.default.removeItem(at: t) }
     }
 
-    // MARK: - Helpers
+    // MARK: - Transcripts
 
-    private func mergeNote(existing: NoteItem, incoming: NoteItem) -> NoteItem {
-        let title = incoming.title.isEmpty ? existing.title : incoming.title
-        let description = incoming.description ?? existing.description
-        let content = (incoming.content?.isEmpty == false) ? incoming.content : existing.content
-        let originalFileName = incoming.originalFileName ?? existing.originalFileName
-        let noteClass = incoming.noteClass ?? existing.noteClass
-        let error = incoming.error ?? existing.error
-        let flashcards = (incoming.flashcards?.isEmpty == false) ? incoming.flashcards : existing.flashcards
-        let quizQuestions = (incoming.quizQuestions?.isEmpty == false) ? incoming.quizQuestions : existing.quizQuestions
-        let duration = incoming.duration ?? existing.duration
-        let createdAt = incoming.createdAt ?? existing.createdAt
+    private func transcriptFileURL(id: String) -> URL? {
+        detailFileURL(id: id).map { $0.deletingPathExtension().appendingPathExtension("transcript.json") }
+    }
 
-        return NoteItem(
-            _id: incoming._id,
-            title: title,
-            description: description,
-            content: content,
-            status: incoming.status,
-            originalFileName: originalFileName,
-            noteClass: noteClass,
-            error: error,
-            flashcards: flashcards,
-            quizQuestions: quizQuestions,
-            createdAt: createdAt,
-            duration: duration
-        )
+    public func loadTranscript(id: String) -> String? {
+        guard let file = transcriptFileURL(id: id), let data = try? Data(contentsOf: file) else { return nil }
+        return decode(String.self, from: data)
+    }
+
+    public func saveTranscript(_ text: String, id: String) {
+        guard let file = transcriptFileURL(id: id), let data = encode(text) else { return }
+        try? data.write(to: file, options: Self.writeOptions)
+    }
+
+    private func reconcileDetails(keeping ids: Set<String>) {
+        guard let dir = detailsDirectory else { return }
+        let keep = Set(ids.compactMap { detailFileURL(id: $0)?.deletingPathExtension().lastPathComponent })
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for file in files {
+            let stem = file.lastPathComponent.components(separatedBy: ".").first ?? ""
+            if !keep.contains(stem) { try? FileManager.default.removeItem(at: file) }
+        }
     }
 }

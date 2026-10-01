@@ -4,20 +4,24 @@ public struct TranscriptView: View {
     let noteId: String
 
     @State private var transcript: String?
-    @State private var isLoading = true
+    @State private var isLoading: Bool
+    @State private var isShowingCachedCopy = false
     @State private var errorMessage: String?
     @State private var showCopiedAlert = false
 
     public init(noteId: String) {
         self.noteId = noteId
+        let cached = LocalDataCache.shared.loadTranscript(id: noteId)
+        _transcript = State(initialValue: cached)
+        _isLoading = State(initialValue: cached == nil)
     }
 
     public var body: some View {
         VStack {
-            if isLoading {
+            if isLoading && transcript == nil {
                 ProgressView("Loading transcript...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let errorMessage {
+            } else if let errorMessage, transcript == nil {
                 VStack(spacing: 12) {
                     Text(errorMessage)
                         .foregroundStyle(.red)
@@ -29,6 +33,13 @@ public struct TranscriptView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let transcript, !transcript.isEmpty {
                 ScrollView {
+                    if isShowingCachedCopy {
+                        Label("Offline copy", systemImage: "icloud.slash")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                    }
                     Text(transcript)
                         .font(.body)
                         .lineSpacing(6)
@@ -62,18 +73,22 @@ public struct TranscriptView: View {
     }
 
     private func loadTranscript() {
-        isLoading = true
+        isLoading = transcript == nil
         errorMessage = nil
         Task {
             do {
                 let text = try await APIClient.fetchTranscript(id: noteId)
                 await MainActor.run {
                     transcript = text
+                    isShowingCachedCopy = false
                     isLoading = false
+                    if !text.isEmpty { LocalDataCache.shared.saveTranscript(text, id: noteId) }
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
+                    // Keep showing the cached copy when offline.
+                    isShowingCachedCopy = transcript != nil
                     isLoading = false
                 }
             }
