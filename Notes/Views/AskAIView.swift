@@ -103,6 +103,7 @@ public struct AskAIView: View {
                         .font(.system(size: 32))
                         .foregroundStyle(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading ? Color.secondary : Color.blue)
                 }
+                .accessibilityLabel("Send message")
                 .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
             }
             .padding()

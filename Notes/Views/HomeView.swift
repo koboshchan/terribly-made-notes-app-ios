@@ -129,6 +129,8 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: selectedClassFilter == "All" ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
+                    .accessibilityLabel("Filter by class")
+                    .accessibilityValue(selectedClassFilter == "All" ? "All notes" : selectedClassFilter)
 
                     // Classes Manager
                     Button {
@@ -136,6 +138,7 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: "folder")
                     }
+                    .accessibilityLabel("Manage classes")
 
                     // Record Note
                     Button {
@@ -143,6 +146,8 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: "mic.badge.plus")
                     }
+                    .accessibilityLabel("New note")
+                    .accessibilityHint("Record or import audio")
                 }
             }
             .sheet(isPresented: $showRecordSheet) {

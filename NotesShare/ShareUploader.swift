@@ -32,13 +32,19 @@ public enum ShareUploader {
         return credential.token
     }
 
+    /// The extension has no picker, so it uses the language last chosen in
+    /// the app (instead of always "english").
+    public static var preferredLanguage: String {
+        UserDefaults(suiteName: UploadStore.appGroup)?.string(forKey: "preferredLanguage") ?? "english"
+    }
+
     public static var hasAnySession: Bool { SharedAuthStore.load() != nil }
 
     /// Stages the file on disk in the app group container (streamed, never
     /// loaded fully in memory) and returns the durable record.
     public static func stage(file: SharedAudioFile) throws -> UploadRecord {
         do {
-            return try BackgroundUploader.stage(audioFile: file.url, displayName: file.name, fields: ["language": "english"])
+            return try BackgroundUploader.stage(audioFile: file.url, displayName: file.name, fields: ["language": preferredLanguage])
         } catch {
             throw NSError(domain: "ShareExtension", code: 404, userInfo: [NSLocalizedDescriptionKey: "Could not read audio file: \(file.name)"])
         }

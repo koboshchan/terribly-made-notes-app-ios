@@ -350,6 +350,7 @@ public struct RecordNoteView: View {
     private func uploadNote(url: URL) {
         isUploading = true
         uploadProgressMessage = "Uploading audio..."
+        UserDefaults(suiteName: UploadStore.appGroup)?.set(selectedLanguage, forKey: "preferredLanguage")
         errorMessage = nil
 
         Task {

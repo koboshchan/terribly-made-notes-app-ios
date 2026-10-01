@@ -101,6 +101,12 @@ public struct NoteDetailView: View {
                         }
                     }
 
+                    if let note, note.content?.isEmpty == false, let file = NoteMarkdownExport.file(for: note) {
+                        ShareLink(item: file) {
+                            Label("Export Markdown", systemImage: "square.and.arrow.up")
+                        }
+                    }
+
                     if note?.isError == true {
                         Button {
                             retryProcessing()
@@ -117,6 +123,7 @@ public struct NoteDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .accessibilityLabel("Note actions")
             }
         }
         .confirmationDialog("Delete Note?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
@@ -185,6 +192,7 @@ public struct NoteDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
+                    .accessibilityHidden(true)
                     .foregroundStyle(.red)
                 Text("Processing Failed")
                     .font(.headline)
