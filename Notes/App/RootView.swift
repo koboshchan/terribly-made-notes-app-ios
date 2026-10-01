@@ -33,7 +33,10 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             // Keep the extension's copy of the session token fresh.
             if phase == .active, clerk.user != nil {
-                Task { _ = try? await APIClient.currentToken() }
+                Task {
+                    _ = try? await APIClient.currentToken()
+                    await APIClient.resumeQueuedUploads()
+                }
             }
         }
         .onChange(of: clerk.user?.id, initial: true) { oldId, newId in

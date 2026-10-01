@@ -277,63 +277,46 @@ public enum APIClient {
         language: String = "english",
         noteClass: String? = nil
     ) async throws -> String {
-        let didStartAccessing = fileURL.startAccessingSecurityScopedResource()
-        defer {
-            if didStartAccessing {
-                fileURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        guard let fileData = try? Data(contentsOf: fileURL) else {
+        let record: UploadRecord
+        do {
+            record = try BackgroundUploader.stage(
+                audioFile: fileURL,
+                displayName: fileURL.lastPathComponent,
+                fields: ["language": language]
+            )
+        } catch {
             throw APIError.fileNotFound
         }
 
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var request = try await authorizedRequest(path: "/api/upload", method: "POST")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-
-        let filename = fileURL.lastPathComponent
-        let mimeType = mimeTypeFor(url: fileURL)
-
-        var body = Data()
-
-        // Append language field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(language)\r\n".data(using: .utf8)!)
-
-        // Append file field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-        body.append(fileData)
-        body.append("\r\n".data(using: .utf8)!)
-
-        // Close multipart boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
-        request.httpBody = body
-
-        let uploadRes: UploadResponse = try await send(request)
-
+        let token = try await currentToken()
+        let noteId: String
+        do {
+            noteId = try await BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
+                .upload(recordId: record.id, token: token, baseURL: AppConfig.baseURL)
+        } catch let err as UploadServerError {
+            throw err.statusCode == 401 ? APIError.sessionExpired : APIError.server(err.message)
+        } catch {
+            throw APIError.network(error.localizedDescription)
+        }
         // If a class was chosen, assign the note to the class
         if let noteClass, !noteClass.isEmpty {
-            try? await updateNoteClass(id: uploadRes.noteId, noteClass: noteClass)
+            try? await updateNoteClass(id: noteId, noteClass: noteClass)
         }
 
-        return uploadRes.noteId
+        return noteId
     }
 
-    private static func mimeTypeFor(url: URL) -> String {
-        let ext = url.pathExtension.lowercased()
-        switch ext {
-        case "m4a": return "audio/m4a"
-        case "mp3": return "audio/mpeg"
-        case "wav": return "audio/wav"
-        case "aac": return "audio/aac"
-        case "flac": return "audio/flac"
-        case "ogg": return "audio/ogg"
-        default: return "audio/m4a"
+    /// Restarts queued uploads (from the share extension, an expired session,
+    /// or a process that died mid-upload). Safe to call repeatedly: records in
+    /// flight are skipped and the Idempotency-Key is reused.
+    public static func resumeQueuedUploads() async {
+        let store = UploadStore.shared
+        store.prune()
+        let candidates = store.all().filter { [.pending, .needsAuth, .uploading].contains($0.status) }
+        guard !candidates.isEmpty, let token = try? await currentToken() else { return }
+        let uploader = BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
+        for record in candidates {
+            uploader.start(recordId: record.id, token: token, baseURL: AppConfig.baseURL)
         }
     }
 }

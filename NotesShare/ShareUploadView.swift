@@ -75,7 +75,7 @@ public struct ShareUploadView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(allCompleted ? "Upload Complete!" : "Uploading \(files.count) Voice \(files.count == 1 ? "Memo" : "Memos")")
                         .font(.headline)
-                    Text(allCompleted ? "AI transcription & study notes queued." : "Uploaded \(completedCount) of \(files.count)")
+                    Text(allCompleted ? (files.contains { $0.status == .queued } ? "Open Notes to finish queued uploads." : "AI transcription & study notes queued.") : "Uploaded \(completedCount) of \(files.count)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -104,9 +104,19 @@ public struct ShareUploadView: View {
                             Image(systemName: "clock")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        case .uploading:
-                            ProgressView()
-                                .controlSize(.small)
+                        case .uploading(let fraction):
+                            if fraction > 0 {
+                                ProgressView(value: fraction)
+                                    .frame(width: 60)
+                                    .accessibilityLabel("Uploading \(Int(fraction * 100)) percent")
+                            } else {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        case .queued:
+                            Label("Queued", systemImage: "tray.and.arrow.up")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         case .completed:
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
@@ -155,30 +165,56 @@ public struct ShareUploadView: View {
     // MARK: - Logic
 
     private func startUploadProcess() {
-        guard let token = ShareUploader.storedAuthToken(), !token.isEmpty else {
-            self.errorMessage = ShareUploader.hasAnySession
-                ? "Your Notes session expired. Open the Notes app once to refresh it, then share again."
-                : "Please open the Notes app and sign in first to enable automatic uploads from Voice Memos."
+        // Never signed in on this device: nothing we can do from here.
+        guard ShareUploader.hasAnySession else {
+            self.errorMessage = "Please open the Notes app and sign in first to enable automatic uploads from Voice Memos."
             self.isProcessing = false
             return
         }
+        // Files are staged durably first; with an expired token they stay
+        // queued and the main app sends them next time it opens.
+        let token = ShareUploader.storedAuthToken()
         self.token = token
 
         Task {
             for i in files.indices {
-                files[i].status = .uploading
+                let record: UploadRecord
                 do {
-                    _ = try await ShareUploader.upload(file: files[i], token: token)
+                    record = try ShareUploader.stage(file: files[i])
+                } catch {
+                    files[i].status = .failed(error.localizedDescription)
+                    continue
+                }
+
+                guard let token else {
+                    ShareUploader.deferToApp(record)
+                    files[i].status = .queued
+                    continue
+                }
+
+                files[i].status = .uploading(0)
+                let progressTask = Task { @MainActor in
+                    while !Task.isCancelled {
+                        if let r = UploadStore.shared.record(id: record.id), r.status == .uploading {
+                            files[i].status = .uploading(r.progress)
+                        }
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                    }
+                }
+                do {
+                    _ = try await ShareUploader.upload(record: record, token: token)
+                    progressTask.cancel()
                     files[i].status = .completed
                 } catch {
+                    progressTask.cancel()
                     files[i].status = .failed(error.localizedDescription)
                 }
             }
 
             self.isProcessing = false
-            self.allCompleted = files.allSatisfy { $0.status == .completed }
+            self.allCompleted = files.allSatisfy { $0.status == .completed || $0.status == .queued }
 
-            if self.allCompleted {
+            if files.allSatisfy({ $0.status == .completed }) {
                 // Auto-dismiss after 1.2 seconds so user sees the checkmark
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
                 await MainActor.run {

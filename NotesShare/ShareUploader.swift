@@ -15,7 +15,8 @@ public struct SharedAudioFile: Identifiable, Sendable, Equatable {
 
     public enum FileStatus: Sendable, Equatable {
         case pending
-        case uploading
+        case uploading(Double)
+        case queued       // staged; the main app finishes it after refreshing the session
         case completed
         case failed(String)
     }
@@ -23,7 +24,6 @@ public struct SharedAudioFile: Identifiable, Sendable, Equatable {
 
 public enum ShareUploader {
     private static let baseURL = URL(string: "https://notes.kobosh.com")!
-    private static let appGroupSuite = "group.com.kobosh.notes"
 
     /// Returns the shared token only if it has not expired. Nil means the user
     /// must open the main app (signed out, or token too old to refresh here).
@@ -34,68 +34,29 @@ public enum ShareUploader {
 
     public static var hasAnySession: Bool { SharedAuthStore.load() != nil }
 
-    public static func upload(file: SharedAudioFile, token: String) async throws -> String {
-        guard let fileData = try? Data(contentsOf: file.url) else {
+    /// Stages the file on disk in the app group container (streamed, never
+    /// loaded fully in memory) and returns the durable record.
+    public static func stage(file: SharedAudioFile) throws -> UploadRecord {
+        do {
+            return try BackgroundUploader.stage(audioFile: file.url, displayName: file.name, fields: ["language": "english"])
+        } catch {
             throw NSError(domain: "ShareExtension", code: 404, userInfo: [NSLocalizedDescriptionKey: "Could not read audio file: \(file.name)"])
         }
-
-        let uploadURL = baseURL.appendingPathComponent("/api/upload")
-        let boundary = "Boundary-\(UUID().uuidString)"
-
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-
-        let mimeType = mimeTypeFor(url: file.url)
-        var body = Data()
-
-        // Language parameter
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
-        body.append("english\r\n".data(using: .utf8)!)
-
-        // File payload
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(file.name)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-        body.append(fileData)
-        body.append("\r\n".data(using: .utf8)!)
-
-        // Close multipart boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        request.httpBody = body
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw NSError(domain: "ShareExtension", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server response"])
-        }
-
-        if http.statusCode == 401 {
-            throw NSError(domain: "ShareExtension", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired. Open Notes to sign in again, then share the file again."])
-        }
-
-        guard (200..<300).contains(http.statusCode) else {
-            struct ErrorResponse: Decodable { let error: String? }
-            let errorMsg = (try? JSONDecoder().decode(ErrorResponse.self, from: data))?.error
-            throw NSError(domain: "ShareExtension", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: errorMsg ?? "Upload failed (HTTP \(http.statusCode))"])
-        }
-
-        struct UploadResponse: Decodable { let noteId: String }
-        let res = try JSONDecoder().decode(UploadResponse.self, from: data)
-        return res.noteId
     }
 
-    private static func mimeTypeFor(url: URL) -> String {
-        let ext = url.pathExtension.lowercased()
-        switch ext {
-        case "m4a": return "audio/m4a"
-        case "mp3": return "audio/mpeg"
-        case "wav": return "audio/wav"
-        case "aac": return "audio/aac"
-        case "flac": return "audio/flac"
-        case "ogg": return "audio/ogg"
-        default: return "audio/m4a"
+    /// Marks a staged upload as waiting for the main app to supply a fresh token.
+    public static func deferToApp(_ record: UploadRecord) {
+        UploadStore.shared.update(id: record.id) { $0.status = .needsAuth }
+    }
+
+    /// Uploads on a background session, so the transfer survives the extension
+    /// being dismissed; the containing app receives completion events.
+    public static func upload(record: UploadRecord, token: String) async throws -> String {
+        do {
+            return try await BackgroundUploader.shared(identifier: BackgroundUploader.shareSessionID)
+                .upload(recordId: record.id, token: token, baseURL: baseURL)
+        } catch let err as UploadServerError where err.statusCode == 401 {
+            throw NSError(domain: "ShareExtension", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired. Open Notes and the upload will finish automatically."])
         }
     }
 }
