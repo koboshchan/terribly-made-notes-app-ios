@@ -4,15 +4,26 @@ import AVFoundation
 public struct RecordNoteView: View {
     let onNoteCreated: (String) -> Void
 
-    @State private var isRecording = false
-    @State private var recordedURL: URL?
-    @State private var audioRecorder: AVAudioRecorder?
+    @State private var recorder = RecordingController()
+    @State private var importedURL: URL?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlaying = false
-    @State private var recordDuration: TimeInterval = 0
-    @State private var recordingStartTime: Date?
-    @State private var accumulatedDuration: TimeInterval = 0
-    @State private var timer: Timer?
+    @State private var showDiscardConfirm = false
+    @State private var pendingDiscardAction: DiscardAction = .rerecord
+    @State private var recoverableDraft: URL?
+
+    private enum DiscardAction { case rerecord, close }
+
+    private var isRecording: Bool { recorder.isCapturing }
+    private var isActiveSession: Bool {
+        switch recorder.state {
+        case .recording, .paused, .interrupted: return true
+        default: return false
+        }
+    }
+    /// The file that will be uploaded: a finished recording or an imported file.
+    private var recordedURL: URL? { recorder.finishedURL ?? importedURL }
+    private var recordDuration: TimeInterval { recorder.duration }
 
     @State private var selectedLanguage = "english"
     @State private var selectedClass = ""
@@ -24,7 +35,6 @@ public struct RecordNoteView: View {
     @State private var errorMessage: String?
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
 
     public init(onNoteCreated: @escaping (String) -> Void) {
         self.onNoteCreated = onNoteCreated
@@ -52,10 +62,16 @@ public struct RecordNoteView: View {
                         Text(formattedTime(recordDuration))
                             .font(.system(size: 40, weight: .semibold, design: .monospaced))
 
-                        HStack(spacing: 24) {
-                            if !isRecording && recordedURL == nil {
+                        if recorder.state == .interrupted || recorder.state == .paused {
+                            Text(recorder.state == .interrupted ? "Paused by the system" : "Paused")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        }
+
+                        HStack(spacing: 16) {
+                            if !isActiveSession && recordedURL == nil {
                                 Button {
-                                    startRecording()
+                                    recorder.start()
                                 } label: {
                                     Label("Start Recording", systemImage: "circle.fill")
                                         .font(.headline)
@@ -65,11 +81,21 @@ public struct RecordNoteView: View {
                                         .background(Color.red)
                                         .clipShape(.capsule)
                                 }
-                            } else if isRecording {
+                            } else if isActiveSession {
                                 Button {
-                                    stopRecording()
+                                    if isRecording { recorder.pause() } else { recorder.resume() }
                                 } label: {
-                                    Label("Stop Recording", systemImage: "stop.fill")
+                                    Label(isRecording ? "Pause" : "Resume", systemImage: isRecording ? "pause.fill" : "record.circle")
+                                        .font(.headline)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    recorder.stop()
+                                } label: {
+                                    Label("Stop", systemImage: "stop.fill")
                                         .font(.headline)
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 24)
@@ -86,9 +112,10 @@ public struct RecordNoteView: View {
                                         .font(.system(size: 44))
                                         .foregroundStyle(.blue)
                                 }
+                                .accessibilityLabel(isPlaying ? "Pause preview" : "Play preview")
 
                                 Button {
-                                    resetRecording()
+                                    requestDiscard(.rerecord)
                                 } label: {
                                     Label("Re-record", systemImage: "arrow.counterclockwise")
                                         .font(.subheadline)
@@ -98,7 +125,19 @@ public struct RecordNoteView: View {
                         }
 
                         // Or choose a file button
-                        if !isRecording && recordedURL == nil {
+                        if let draft = recoverableDraft, !isActiveSession, recordedURL == nil {
+                            Button {
+                                recorder.restore(draft: draft)
+                                recoverableDraft = nil
+                            } label: {
+                                Label("Recover unsaved recording", systemImage: "arrow.uturn.backward.circle")
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                        }
+
+                        if !isActiveSession && recordedURL == nil {
                             Button {
                                 showFileImporter = true
                             } label: {
@@ -106,7 +145,7 @@ public struct RecordNoteView: View {
                                     .font(.subheadline)
                             }
                             .buttonStyle(.bordered)
-                        } else if let recordedURL, !isRecording {
+                        } else if let recordedURL, !isActiveSession {
                             Text("Ready to upload: \(recordedURL.lastPathComponent)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -156,7 +195,7 @@ public struct RecordNoteView: View {
                     .clipShape(.rect(cornerRadius: 16))
                     .padding(.horizontal)
 
-                    if let errorMessage {
+                    if let errorMessage = errorMessage ?? recorder.errorMessage {
                         Text(errorMessage)
                             .font(.subheadline)
                             .foregroundStyle(.red)
@@ -192,12 +231,38 @@ public struct RecordNoteView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        stopRecording()
-                        dismiss()
+                        if recorder.hasUnsavedAudio {
+                            requestDiscard(.close)
+                        } else {
+                            dismiss()
+                        }
                     }
                     .disabled(isUploading)
                 }
             }
+            .confirmationDialog(
+                "Discard this recording?",
+                isPresented: $showDiscardConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Discard Recording", role: .destructive) {
+                    stopPlayback()
+                    recorder.discard()
+                    importedURL = nil
+                    if pendingDiscardAction == .close { dismiss() }
+                }
+                if pendingDiscardAction == .close {
+                    Button("Keep as Draft") {
+                        // The file stays in Drafts and is offered for recovery next time.
+                        recorder.stop()
+                        dismiss()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This audio hasn't been uploaded yet.")
+            }
+            .interactiveDismissDisabled(recorder.hasUnsavedAudio || isUploading)
             .fileImporter(
                 isPresented: $showFileImporter,
                 allowedContentTypes: [.audio],
@@ -206,7 +271,7 @@ public struct RecordNoteView: View {
                 switch result {
                 case .success(let urls):
                     if let first = urls.first {
-                        recordedURL = first
+                        importedURL = first
                     }
                 case .failure(let error):
                     errorMessage = error.localizedDescription
@@ -217,149 +282,38 @@ public struct RecordNoteView: View {
                     availableClasses = classes
                 }
             }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active, isRecording, let start = recordingStartTime {
-                    recordDuration = accumulatedDuration + Date().timeIntervalSince(start)
+            .onAppear {
+                if case .idle = recorder.state, importedURL == nil {
+                    recoverableDraft = RecordingController.recoverableDraft()
                 }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
-                handleAudioInterruption(notification: notification)
             }
             .onDisappear {
-                if isRecording {
-                    stopRecording()
-                }
-                audioPlayer?.stop()
-                audioPlayer = nil
-                isPlaying = false
+                // Stopping (not discarding) keeps the draft file on disk.
+                recorder.tearDown()
+                stopPlayback()
             }
         }
     }
 
     // MARK: - Audio Recording Helpers
 
-    private func startRecording() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
-            try session.setActive(true)
-        } catch {
-            errorMessage = "Audio session setup failed: \(error.localizedDescription)"
+    private func requestDiscard(_ action: DiscardAction) {
+        guard recorder.hasUnsavedAudio else {
+            // Only an imported file is selected. It isn't ours to delete,
+            // so just clear the selection.
+            stopPlayback()
+            importedURL = nil
+            if action == .close { dismiss() }
             return
         }
-
-        session.requestRecordPermission { allowed in
-            DispatchQueue.main.async {
-                if allowed {
-                    beginRecording()
-                } else {
-                    errorMessage = "Microphone access denied. Please enable in Settings."
-                }
-            }
-        }
+        pendingDiscardAction = action
+        showDiscardConfirm = true
     }
 
-    private func beginRecording() {
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileURL = tempDir.appendingPathComponent("note_recording_\(Date().timeIntervalSince1970).m4a")
-
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100.0,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-
-        do {
-            let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
-            guard recorder.record() else {
-                errorMessage = "Failed to start audio recording"
-                return
-            }
-
-            audioRecorder = recorder
-            recordedURL = fileURL
-            isRecording = true
-            accumulatedDuration = 0
-            recordingStartTime = Date()
-            recordDuration = 0
-            errorMessage = nil
-
-            startTimer()
-        } catch {
-            errorMessage = "Failed to start recording: \(error.localizedDescription)"
-        }
-    }
-
-    private func startTimer() {
-        timer?.invalidate()
-        let t = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
-            if let start = recordingStartTime {
-                recordDuration = accumulatedDuration + Date().timeIntervalSince(start)
-            }
-        }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
-    }
-
-    private func stopRecording() {
-        if let start = recordingStartTime {
-            accumulatedDuration += Date().timeIntervalSince(start)
-            recordingStartTime = nil
-        }
-        recordDuration = accumulatedDuration
-
-        audioRecorder?.stop()
-        audioRecorder = nil
-        timer?.invalidate()
-        timer = nil
-        isRecording = false
-
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-
-    private func resetRecording() {
-        stopRecording()
+    private func stopPlayback() {
         audioPlayer?.stop()
         audioPlayer = nil
         isPlaying = false
-        recordDuration = 0
-        accumulatedDuration = 0
-        recordingStartTime = nil
-        recordedURL = nil
-    }
-
-    private func handleAudioInterruption(notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
-            return
-        }
-
-        switch type {
-        case .began:
-            if isRecording {
-                audioRecorder?.pause()
-                if let start = recordingStartTime {
-                    accumulatedDuration += Date().timeIntervalSince(start)
-                    recordingStartTime = nil
-                }
-                timer?.invalidate()
-                timer = nil
-            }
-        case .ended:
-            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                if options.contains(.shouldResume), isRecording {
-                    try? AVAudioSession.sharedInstance().setActive(true)
-                    audioRecorder?.record()
-                    recordingStartTime = Date()
-                    startTimer()
-                }
-            }
-        @unknown default:
-            break
-        }
     }
 
     private func togglePlayback(url: URL) {
@@ -407,6 +361,10 @@ public struct RecordNoteView: View {
                 )
                 await MainActor.run {
                     isUploading = false
+                    stopPlayback()
+                    // The upload was staged as its own copy, so the draft can go.
+                    recorder.uploadSucceeded()
+                    importedURL = nil
                     onNoteCreated(noteId)
                     dismiss()
                 }
