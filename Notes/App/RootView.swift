@@ -8,8 +8,11 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if clerk.user != nil {
+            if let user = clerk.user {
+                // Scope the cache before HomeView reads it in init.
+                let _ = LocalDataCache.shared.setScope(userId: user.id)
                 HomeView()
+                    .id(user.id)
             } else {
                 VStack(spacing: 16) {
                     Text("Notes")
@@ -25,6 +28,14 @@ struct RootView: View {
         }
         .sheet(isPresented: $authIsPresented) {
             AuthView()
+        }
+        .onChange(of: clerk.user?.id, initial: true) { oldId, newId in
+            // Signed out, or switched accounts: drop everything the previous
+            // session left on disk.
+            if newId == nil || (oldId != nil && oldId != newId) {
+                SessionCleanup.signedOut()
+                if let newId { LocalDataCache.shared.setScope(userId: newId) }
+            }
         }
     }
 }

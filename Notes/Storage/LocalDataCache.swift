@@ -1,25 +1,35 @@
 import Foundation
 
-public final class LocalDataCache: Sendable {
+/// Offline cache, partitioned per signed-in user and API server so one
+/// account never sees another's notes on a shared device. Files are written
+/// with data protection, excluded from backups, and wiped on sign-out.
+public final class LocalDataCache: @unchecked Sendable {
     public static let shared = LocalDataCache()
 
-    private let cacheDirectory: URL
-    private let detailsDirectory: URL
+    private let rootDirectory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let lock = NSLock()
+    private var scopeKey: String?
+
+    private static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
 
     private init() {
         let fileManager = FileManager.default
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        let baseFolder = appSupport.appendingPathComponent("NotesCache", isDirectory: true)
-        let detailsFolder = baseFolder.appendingPathComponent("details", isDirectory: true)
-
+        var baseFolder = appSupport.appendingPathComponent("NotesCache", isDirectory: true)
         try? fileManager.createDirectory(at: baseFolder, withIntermediateDirectories: true)
-        try? fileManager.createDirectory(at: detailsFolder, withIntermediateDirectories: true)
 
-        self.cacheDirectory = baseFolder
-        self.detailsDirectory = detailsFolder
+        // Drop the old unscoped cache from earlier builds.
+        for legacy in ["notes_cache.json", "classes_cache.json", "details"] {
+            try? fileManager.removeItem(at: baseFolder.appendingPathComponent(legacy))
+        }
+
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? baseFolder.setResourceValues(values)
+        self.rootDirectory = baseFolder
 
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
@@ -30,22 +40,53 @@ public final class LocalDataCache: Sendable {
         self.decoder = dec
     }
 
+    // MARK: - Scope
+
+    /// Selects the cache partition. Pass nil to disable all reads and writes.
+    public func setScope(userId: String?, server: URL = AppConfig.baseURL) {
+        lock.lock(); defer { lock.unlock() }
+        guard let userId, !userId.isEmpty else { scopeKey = nil; return }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-."))
+        func clean(_ s: String) -> String { String(s.unicodeScalars.filter { allowed.contains($0) }) }
+        let key = "\(clean(server.host ?? "server"))_\(clean(userId))"
+        scopeKey = key
+        let dir = rootDirectory.appendingPathComponent(key, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir.appendingPathComponent("details", isDirectory: true),
+                                                 withIntermediateDirectories: true)
+    }
+
+    private var cacheDirectory: URL? {
+        lock.lock(); defer { lock.unlock() }
+        return scopeKey.map { rootDirectory.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    private var detailsDirectory: URL? {
+        cacheDirectory?.appendingPathComponent("details", isDirectory: true)
+    }
+
+    /// Removes every cached partition (sign-out / account switch).
+    public func clearAll() {
+        setScope(userId: nil)
+        let items = (try? FileManager.default.contentsOfDirectory(at: rootDirectory, includingPropertiesForKeys: nil)) ?? []
+        for item in items { try? FileManager.default.removeItem(at: item) }
+    }
+
     // MARK: - Notes List
 
-    private var notesFileURL: URL {
-        cacheDirectory.appendingPathComponent("notes_cache.json")
+    private var notesFileURL: URL? {
+        cacheDirectory?.appendingPathComponent("notes_cache.json")
     }
 
     public func loadNotes() -> [NoteItem]? {
-        guard let data = try? Data(contentsOf: notesFileURL) else {
+        guard let url = notesFileURL, let data = try? Data(contentsOf: url) else {
             return nil
         }
         return try? decoder.decode([NoteItem].self, from: data)
     }
 
     public func saveNotes(_ notes: [NoteItem]) {
-        guard let data = try? encoder.encode(notes) else { return }
-        try? data.write(to: notesFileURL, options: .atomic)
+        guard let url = notesFileURL, let data = try? encoder.encode(notes) else { return }
+        try? data.write(to: url, options: Self.writeOptions)
 
         // Also update individual cached details for fast offline access
         for note in notes {
@@ -62,25 +103,26 @@ public final class LocalDataCache: Sendable {
 
     // MARK: - Classes List
 
-    private var classesFileURL: URL {
-        cacheDirectory.appendingPathComponent("classes_cache.json")
+    private var classesFileURL: URL? {
+        cacheDirectory?.appendingPathComponent("classes_cache.json")
     }
 
     public func loadClasses() -> [UserClass]? {
-        guard let data = try? Data(contentsOf: classesFileURL) else {
+        guard let url = classesFileURL, let data = try? Data(contentsOf: url) else {
             return nil
         }
         return try? decoder.decode([UserClass].self, from: data)
     }
 
     public func saveClasses(_ classes: [UserClass]) {
-        guard let data = try? encoder.encode(classes) else { return }
-        try? data.write(to: classesFileURL, options: .atomic)
+        guard let url = classesFileURL, let data = try? encoder.encode(classes) else { return }
+        try? data.write(to: url, options: Self.writeOptions)
     }
 
     // MARK: - Individual Note Detail
 
-    private func detailFileURL(id: String) -> URL {
+    private func detailFileURL(id: String) -> URL? {
+        guard let detailsDirectory else { return nil }
         // Sanitize note id for filesystem
         let safeName = id.components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
         let filename = safeName.isEmpty ? "note" : safeName
@@ -88,22 +130,21 @@ public final class LocalDataCache: Sendable {
     }
 
     public func loadNoteDetail(id: String) -> NoteItem? {
-        let file = detailFileURL(id: id)
-        guard let data = try? Data(contentsOf: file) else {
+        guard let file = detailFileURL(id: id), let data = try? Data(contentsOf: file) else {
             return nil
         }
         return try? decoder.decode(NoteItem.self, from: data)
     }
 
     public func saveNoteDetail(_ note: NoteItem) {
-        let file = detailFileURL(id: note.id)
-        guard let data = try? encoder.encode(note) else { return }
-        try? data.write(to: file, options: .atomic)
+        guard let file = detailFileURL(id: note.id), let data = try? encoder.encode(note) else { return }
+        try? data.write(to: file, options: Self.writeOptions)
     }
 
     public func removeNote(id: String) {
-        let file = detailFileURL(id: id)
-        try? FileManager.default.removeItem(at: file)
+        if let file = detailFileURL(id: id) {
+            try? FileManager.default.removeItem(at: file)
+        }
 
         if var cachedNotes = loadNotes() {
             cachedNotes.removeAll { $0.id == id }
