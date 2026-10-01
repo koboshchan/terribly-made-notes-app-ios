@@ -35,5 +35,7 @@
 		<key>NSExtensionPrincipalClass</key>
 		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
 	</dict>
+	<key>KeychainAccessGroup</key>
+	<string>$(AppIdentifierPrefix)group.com.kobosh.notes</string>
 </dict>
 </plist>

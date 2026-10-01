@@ -84,7 +84,12 @@ public enum APIClient {
     static func currentToken() async throws -> String {
         guard let session = Clerk.shared.session else { throw APIError.notSignedIn }
         guard let token = try await session.getToken() else { throw APIError.sessionExpired }
-        SharedAuthStore.save(token: token, userId: Clerk.shared.user?.id)
+        do {
+            try SharedAuthStore.save(token: token, userId: Clerk.shared.user?.id)
+        } catch {
+            // The app itself can continue; only the share extension loses access.
+            print("Shared session mirror failed: \(error.localizedDescription)")
+        }
         return token
     }
 

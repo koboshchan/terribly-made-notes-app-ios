@@ -54,6 +54,7 @@ targets:
         NSMicrophoneUsageDescription: "Notes uses your microphone to record audio for AI transcription and study guide generation."
         UIBackgroundModes:
           - audio
+        KeychainAccessGroup: $(AppIdentifierPrefix)group.com.kobosh.notes
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobosh.notes
@@ -77,6 +78,7 @@ targets:
       path: NotesShare/Info.plist
       properties:
         CFBundleDisplayName: Notes
+        KeychainAccessGroup: $(AppIdentifierPrefix)group.com.kobosh.notes
         NSExtension:
           NSExtensionAttributes:
             NSExtensionActivationRule:

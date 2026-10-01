@@ -4,7 +4,7 @@ import Foundation
 enum SessionCleanup {
     static func signedOut() {
         LocalDataCache.shared.clearAll()
-        SharedAuthStore.clear()
+        do { try SharedAuthStore.clear() } catch { print("Shared session clear failed: \(error.localizedDescription)") }
         UploadStore.shared.clearAll()
     }
 }

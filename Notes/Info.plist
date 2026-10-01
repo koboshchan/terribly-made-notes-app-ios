@@ -33,5 +33,7 @@
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>KeychainAccessGroup</key>
+	<string>$(AppIdentifierPrefix)group.com.kobosh.notes</string>
 </dict>
 </plist>
