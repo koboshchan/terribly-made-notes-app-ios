@@ -137,9 +137,12 @@ public final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchec
     public func cancelAll() async {
         let tasks = await session.allTasks
         for task in tasks { task.cancel() }
-        stateLock.lock()
-        let pending = waiters; waiters.removeAll(); responseData.removeAll()
-        stateLock.unlock()
+        let pending = stateLock.withLock { () -> [String: CheckedContinuation<String, Error>] in
+            let p = waiters
+            waiters.removeAll()
+            responseData.removeAll()
+            return p
+        }
         for (_, w) in pending { w.resume(throwing: CancellationError()) }
     }
 

@@ -82,10 +82,11 @@ public enum APIClient {
     /// Fetches a fresh Clerk token and mirrors it to the shared Keychain so the
     /// share extension can use it while it is still valid.
     static func currentToken() async throws -> String {
-        guard let session = Clerk.shared.session else { throw APIError.notSignedIn }
+        guard let session = await Clerk.shared.session else { throw APIError.notSignedIn }
         guard let token = try await session.getToken() else { throw APIError.sessionExpired }
         do {
-            try SharedAuthStore.save(token: token, userId: Clerk.shared.user?.id)
+            let userId = await Clerk.shared.user?.id
+            try SharedAuthStore.save(token: token, userId: userId)
         } catch {
             // The app itself can continue; only the share extension loses access.
             print("Shared session mirror failed: \(error.localizedDescription)")
@@ -350,13 +351,14 @@ public enum APIClient {
         language: String = "english",
         noteClass: String? = nil
     ) async throws -> String {
+        let currentUserId = await Clerk.shared.user?.id
         let record: UploadRecord
         do {
             record = try BackgroundUploader.stage(
                 audioFile: fileURL,
                 displayName: fileURL.lastPathComponent,
                 fields: uploadFields(language: language, noteClass: noteClass),
-                ownerUserId: Clerk.shared.user?.id,
+                ownerUserId: currentUserId,
                 server: AppConfig.baseURL
             )
         } catch {
@@ -367,7 +369,7 @@ public enum APIClient {
         let noteId: String
         do {
             noteId = try await BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
-                .upload(recordId: record.id, token: token, userId: Clerk.shared.user?.id, baseURL: AppConfig.baseURL)
+                .upload(recordId: record.id, token: token, userId: currentUserId, baseURL: AppConfig.baseURL)
         } catch let err as UploadServerError {
             throw err.statusCode == 401 ? APIError.sessionExpired : APIError.server(err.message)
         } catch {
@@ -393,7 +395,7 @@ public enum APIClient {
         store.prune()
         let candidates = store.all().filter { [.pending, .needsAuth, .uploading].contains($0.status) }
         guard !candidates.isEmpty, let token = try? await currentToken() else { return }
-        let userId = Clerk.shared.user?.id
+        let userId = await Clerk.shared.user?.id
         let uploader = BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
         for record in candidates {
             // start() refuses (and marks failed) records owned by another account/server.

@@ -61,7 +61,7 @@ public final class LocalDataCache: @unchecked Sendable {
     // MARK: - Scope
 
     /// Selects the cache partition. Pass nil to disable all reads and writes.
-    public func setScope(userId: String?, server: URL = AppConfig.baseURL) {
+    func setScope(userId: String?, server: URL = AppConfig.baseURL) {
         lock.lock(); defer { lock.unlock() }
         guard let userId, !userId.isEmpty else { scopeKey = nil; return }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-."))

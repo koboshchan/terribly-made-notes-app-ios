@@ -233,12 +233,13 @@ final class RecordingController: NSObject, AVAudioRecorderDelegate {
         let nc = NotificationCenter.default
         let session = AVAudioSession.sharedInstance()
         observers.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
-            let info = note.userInfo
-            MainActor.assumeIsolated { self?.handleInterruption(info) }
+            let rawType = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let rawOpts = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
+            MainActor.assumeIsolated { self?.handleInterruption(rawType: rawType, rawOpts: rawOpts) }
         })
         observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { [weak self] note in
-            let info = note.userInfo
-            MainActor.assumeIsolated { self?.handleRouteChange(info) }
+            let rawReason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            MainActor.assumeIsolated { self?.handleRouteChange(rawReason: rawReason) }
         })
         observers.append(nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: session, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -256,8 +257,8 @@ final class RecordingController: NSObject, AVAudioRecorderDelegate {
         observers.removeAll()
     }
 
-    private func handleInterruption(_ info: [AnyHashable: Any]?) {
-        guard let raw = info?[AVAudioSessionInterruptionTypeKey] as? UInt,
+    private func handleInterruption(rawType: UInt?, rawOpts: UInt?) {
+        guard let raw = rawType,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         switch type {
         case .began:
@@ -267,7 +268,7 @@ final class RecordingController: NSObject, AVAudioRecorderDelegate {
             state = .interrupted
         case .ended:
             guard state == .interrupted else { return }
-            let opts = AVAudioSession.InterruptionOptions(rawValue: info?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+            let opts = AVAudioSession.InterruptionOptions(rawValue: rawOpts ?? 0)
             if opts.contains(.shouldResume) { resume() }
             // Otherwise stay interrupted; the user taps Resume.
         @unknown default:
@@ -275,8 +276,8 @@ final class RecordingController: NSObject, AVAudioRecorderDelegate {
         }
     }
 
-    private func handleRouteChange(_ info: [AnyHashable: Any]?) {
-        guard let raw = info?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+    private func handleRouteChange(rawReason: UInt?) {
+        guard let raw = rawReason,
               let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
         // Headset/mic unplugged: pause rather than silently switching mics.
         if reason == .oldDeviceUnavailable, state == .recording {
