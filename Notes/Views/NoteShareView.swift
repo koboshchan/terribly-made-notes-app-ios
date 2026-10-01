@@ -1,16 +1,15 @@
 import SwiftUI
 
-/// Create, copy, rotate or revoke the read-only share link for one note.
+/// Create, copy, update or delete the read-only share link for one note.
 struct NoteShareView: View {
     let noteId: String
     @Environment(\.dismiss) private var dismiss
 
     @State private var info: APIClient.ShareInfo?
-    @State private var expiresInDays = 30
     @State private var allowChat = false
     @State private var isWorking = true
     @State private var errorMessage: String?
-    @State private var confirmRevoke = false
+    @State private var confirmDelete = false
 
     private var activeURL: URL? {
         guard info?.shareEnabled == true, let s = info?.shareUrl else { return nil }
@@ -32,30 +31,20 @@ struct NoteShareView: View {
                         } label: {
                             Label("Copy Link", systemImage: "doc.on.doc")
                         }
-                        if let expiry = info?.shareExpiresAt.flatMap(Self.parseDate) {
-                            LabeledContent("Expires", value: expiry.formatted(date: .abbreviated, time: .omitted))
-                        }
+                        LabeledContent("Expires", value: info?.shareExpiresAt.flatMap(Self.parseDate)?.formatted(date: .abbreviated, time: .omitted) ?? "Never")
                     }
                 }
 
                 Section {
-                    Picker("Expires after", selection: $expiresInDays) {
-                        Text("1 day").tag(1)
-                        Text("7 days").tag(7)
-                        Text("30 days").tag(30)
-                        Text("90 days").tag(90)
-                        Text("1 year").tag(365)
-                    }
                     Toggle("Allow viewers to Ask AI", isOn: $allowChat)
                 } footer: {
                     Text("Anyone with the link can read this note. Ask AI uses your account's quota.")
                 }
 
                 Section {
-                    Button(activeURL == nil ? "Create Link" : "Update Link") { save(rotate: false) }
+                    Button(activeURL == nil ? "Create Link" : "Update Link") { save() }
                     if activeURL != nil {
-                        Button("New Link (old one stops working)") { save(rotate: true) }
-                        Button("Stop Sharing", role: .destructive) { confirmRevoke = true }
+                        Button("Delete Share Link", role: .destructive) { confirmDelete = true }
                     }
                 }
                 .disabled(isWorking)
@@ -70,10 +59,10 @@ struct NoteShareView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .confirmationDialog("Stop sharing?", isPresented: $confirmRevoke, titleVisibility: .visible) {
-                Button("Stop Sharing", role: .destructive) { revoke() }
+            .confirmationDialog("Delete share link?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete Share Link", role: .destructive) { deleteLink() }
             } message: {
-                Text("The current link will stop working.")
+                Text("The link will stop working. Your note is not deleted.")
             }
             .task { await load() }
         }
@@ -90,12 +79,12 @@ struct NoteShareView: View {
         isWorking = false
     }
 
-    private func save(rotate: Bool) {
+    private func save() {
         isWorking = true
         errorMessage = nil
         Task {
             do {
-                info = try await APIClient.createShare(id: noteId, expiresInDays: expiresInDays, allowChat: allowChat, rotate: rotate)
+                info = try await APIClient.createShare(id: noteId, allowChat: allowChat)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -103,12 +92,12 @@ struct NoteShareView: View {
         }
     }
 
-    private func revoke() {
+    private func deleteLink() {
         isWorking = true
         errorMessage = nil
         Task {
             do {
-                try await APIClient.revokeShare(id: noteId)
+                try await APIClient.deleteShare(id: noteId)
                 info = nil
             } catch {
                 errorMessage = error.localizedDescription

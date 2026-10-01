@@ -263,25 +263,22 @@ public enum APIClient {
     }
 
     private struct ShareBody: Encodable {
-        let expiresInDays: Int
         let allowChat: Bool
-        let rotate: Bool?
     }
 
     public static func fetchShare(id: String) async throws -> ShareInfo {
         try await send(try await authorizedRequest(path: "/api/notes/\(id)/share"))
     }
 
-    /// Creates (or updates) the read-only link. `rotate` issues a new token,
-    /// invalidating the old URL.
-    public static func createShare(id: String, expiresInDays: Int = 30, allowChat: Bool = false, rotate: Bool = false) async throws -> ShareInfo {
+    /// Creates (or updates) the read-only link, keeping the existing token.
+    public static func createShare(id: String, allowChat: Bool = false) async throws -> ShareInfo {
         var request = try await authorizedRequest(path: "/api/notes/\(id)/share", method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(ShareBody(expiresInDays: expiresInDays, allowChat: allowChat, rotate: rotate ? true : nil))
+        request.httpBody = try encoder.encode(ShareBody(allowChat: allowChat))
         return try await send(request)
     }
 
-    public static func revokeShare(id: String) async throws {
+    public static func deleteShare(id: String) async throws {
         try await sendVoid(try await authorizedRequest(path: "/api/notes/\(id)/share", method: "DELETE"))
     }
 
