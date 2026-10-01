@@ -8,6 +8,7 @@ public struct TranscriptView: View {
     @State private var isShowingCachedCopy = false
     @State private var errorMessage: String?
     @State private var showCopiedAlert = false
+    @State private var showEditor = false
 
     public init(noteId: String) {
         self.noteId = noteId
@@ -49,11 +50,31 @@ public struct TranscriptView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            showEditor = true
+                        } label: {
+                            Label("Correct Transcript", systemImage: "pencil")
+                        }
+                        .disabled(isShowingCachedCopy)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             UIPasteboard.general.string = transcript
                             showCopiedAlert = true
                         } label: {
                             Label("Copy", systemImage: "doc.on.doc")
                         }
+                    }
+                }
+                .sheet(isPresented: $showEditor) {
+                    TextCorrectionView(
+                        title: "Correct Transcript",
+                        showsTitleField: false,
+                        editedTitle: "",
+                        text: transcript
+                    ) { _, corrected in
+                        try await APIClient.updateTranscript(id: noteId, transcript: corrected)
+                        self.transcript = corrected
+                        LocalDataCache.shared.saveTranscript(corrected, id: noteId)
                     }
                 }
                 .alert("Copied to Clipboard", isPresented: $showCopiedAlert) {

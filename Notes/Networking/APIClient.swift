@@ -234,6 +234,57 @@ public enum APIClient {
         try await sendVoid(request)
     }
 
+    /// Edits title and/or Markdown content (server rejects while processing).
+    public static func updateNote(id: String, title: String?, content: String?) async throws {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)", method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: String] = [:]
+        if let title { body["title"] = title }
+        if let content { body["content"] = content }
+        request.httpBody = try encoder.encode(body)
+        try await sendVoid(request)
+    }
+
+    /// Saves a corrected transcript.
+    public static func updateTranscript(id: String, transcript: String) async throws {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)/transcript", method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(["transcript": transcript])
+        try await sendVoid(request)
+    }
+
+    // MARK: - Sharing
+
+    public struct ShareInfo: Decodable, Sendable {
+        public let shareUrl: String?
+        public let shareEnabled: Bool?
+        public let shareExpiresAt: String?
+        public let shareAllowChat: Bool?
+    }
+
+    private struct ShareBody: Encodable {
+        let expiresInDays: Int
+        let allowChat: Bool
+        let rotate: Bool?
+    }
+
+    public static func fetchShare(id: String) async throws -> ShareInfo {
+        try await send(try await authorizedRequest(path: "/api/notes/\(id)/share"))
+    }
+
+    /// Creates (or updates) the read-only link. `rotate` issues a new token,
+    /// invalidating the old URL.
+    public static func createShare(id: String, expiresInDays: Int = 30, allowChat: Bool = false, rotate: Bool = false) async throws -> ShareInfo {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)/share", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(ShareBody(expiresInDays: expiresInDays, allowChat: allowChat, rotate: rotate ? true : nil))
+        return try await send(request)
+    }
+
+    public static func revokeShare(id: String) async throws {
+        try await sendVoid(try await authorizedRequest(path: "/api/notes/\(id)/share", method: "DELETE"))
+    }
+
     public static func fetchTranscript(id: String) async throws -> String {
         let request = try await authorizedRequest(path: "/api/notes/\(id)/transcript")
         let (data, response) = try await URLSession.shared.data(for: request)

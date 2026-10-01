@@ -13,6 +13,8 @@ public struct NoteDetailView: View {
     @State private var isDeleting = false
     @State private var showDeleteConfirmation = false
     @State private var showClassPicker = false
+    @State private var showEditor = false
+    @State private var showShareSheet = false
     @State private var availableClasses: [UserClass]
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -107,6 +109,19 @@ public struct NoteDetailView: View {
                         }
                     }
 
+                    if note?.isCompleted == true {
+                        Button {
+                            showEditor = true
+                        } label: {
+                            Label("Edit Note", systemImage: "pencil")
+                        }
+                        Button {
+                            showShareSheet = true
+                        } label: {
+                            Label("Share Link", systemImage: "link")
+                        }
+                    }
+
                     if note?.isError == true {
                         Button {
                             retryProcessing()
@@ -125,6 +140,26 @@ public struct NoteDetailView: View {
                 }
                 .accessibilityLabel("Note actions")
             }
+        }
+        .sheet(isPresented: $showEditor) {
+            if let note {
+                TextCorrectionView(
+                    title: "Edit Note",
+                    showsTitleField: true,
+                    editedTitle: note.title,
+                    text: note.content ?? ""
+                ) { newTitle, newContent in
+                    try await APIClient.updateNote(
+                        id: noteId,
+                        title: newTitle == note.title ? nil : newTitle,
+                        content: newContent == (note.content ?? "") ? nil : newContent
+                    )
+                    loadData()
+                }
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            NoteShareView(noteId: noteId)
         }
         .confirmationDialog("Delete Note?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete Note", role: .destructive) {
