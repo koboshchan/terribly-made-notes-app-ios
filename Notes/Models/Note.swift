@@ -110,6 +110,12 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
     public let quizQuestions: [QuizQuestion]?
     public let createdAt: String?
     public let duration: Double?
+    /// Server modification time; used to tell whether a cached detail is stale
+    /// when the list only returns summaries.
+    public let updatedAt: String?
+
+    /// List responses omit content and study material.
+    public var isSummary: Bool { content == nil && flashcards == nil && quizQuestions == nil }
 
     enum CodingKeys: String, CodingKey {
         case _id
@@ -127,6 +133,7 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
         case createdAt
         case recordedAt
         case duration
+        case updatedAt
     }
 
     public init(
@@ -141,7 +148,8 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
         flashcards: [Flashcard]? = nil,
         quizQuestions: [QuizQuestion]? = nil,
         createdAt: String? = nil,
-        duration: Double? = nil
+        duration: Double? = nil,
+        updatedAt: String? = nil
     ) {
         self._id = _id
         self.title = title
@@ -155,6 +163,7 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
         self.quizQuestions = quizQuestions
         self.createdAt = createdAt
         self.duration = duration
+        self.updatedAt = updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -195,6 +204,7 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
 
         // createdAt
         self.createdAt = try? container.decodeIfPresent(String.self, forKey: .createdAt)
+        self.updatedAt = try? container.decodeIfPresent(String.self, forKey: .updatedAt)
 
         // duration (Double, Int, or String)
         if let d = try? container.decodeIfPresent(Double.self, forKey: .duration) {
@@ -236,6 +246,7 @@ public struct NoteItem: Codable, Identifiable, Hashable, Sendable {
         try container.encodeIfPresent(quizQuestions, forKey: .quizQuestions)
         try container.encodeIfPresent(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(duration, forKey: .duration)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
     }
 
     public var isCompleted: Bool {

@@ -145,50 +145,70 @@ public enum APIClient {
 
     // MARK: - Notes Endpoints
 
-    public static func fetchNotes(search: String? = nil, sortBy: String = "uploaded", sortOrder: String = "desc") async throws -> [NoteItem] {
+    public struct NotesPage: Sendable {
+        public let notes: [NoteItem]
+        public let hasMore: Bool
+    }
+
+    /// One page of note summaries (server default and max page size 50/100;
+    /// content and study material are not included).
+    public static func fetchNotesPage(
+        page: Int,
+        limit: Int = 50,
+        search: String? = nil,
+        sortBy: String = "uploaded",
+        sortOrder: String = "desc"
+    ) async throws -> NotesPage {
         var components = URLComponents(url: AppConfig.baseURL.appendingPathComponent("/api/notes"), resolvingAgainstBaseURL: true)!
         var queryItems = [
             URLQueryItem(name: "sortBy", value: sortBy),
-            URLQueryItem(name: "sortOrder", value: sortOrder)
+            URLQueryItem(name: "sortOrder", value: sortOrder),
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "limit", value: String(limit))
         ]
         if let search, !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             queryItems.append(URLQueryItem(name: "search", value: search))
         }
         components.queryItems = queryItems
-
-        guard let url = components.url else {
-            throw APIError.invalidResponse
-        }
+        guard let url = components.url else { throw APIError.invalidResponse }
 
         let request = try await authorizedRequest(url: url)
-
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: request)
-        } catch let urlErr as URLError {
-            throw APIError.network(urlErr.localizedDescription)
         } catch {
             throw APIError.network(error.localizedDescription)
         }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.invalidResponse
-        }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         try checkStatus(http, data: data)
 
+        let hasMore = http.value(forHTTPHeaderField: "X-Has-More")?.lowercased() == "true"
+        let notes: [NoteItem]
         if let direct = try? decoder.decode([NoteItem].self, from: data) {
-            return direct
+            notes = direct
+        } else if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
+            notes = lossy.compactMap(\.value)
+        } else {
+            throw APIError.decoding("Could not decode notes page")
         }
+        return NotesPage(notes: notes, hasMore: hasMore)
+    }
 
-        if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
-            return lossy.compactMap(\.value)
+    /// Fetches every page. The result is a complete list, so callers may
+    /// reconcile deletions against it. Throws if any page fails (a partial
+    /// list must never be treated as complete).
+    public static func fetchNotes(search: String? = nil, sortBy: String = "uploaded", sortOrder: String = "desc") async throws -> [NoteItem] {
+        var all: [NoteItem] = []
+        var seen = Set<String>()
+        var page = 0
+        while true {
+            try Task.checkCancellation()
+            let result = try await fetchNotesPage(page: page, limit: 100, search: search, sortBy: sortBy, sortOrder: sortOrder)
+            for note in result.notes where seen.insert(note.id).inserted { all.append(note) }
+            guard result.hasMore, !result.notes.isEmpty, page < 500 else { break }
+            page += 1
         }
-
-        do {
-            return try decoder.decode([NoteItem].self, from: data)
-        } catch {
-            throw APIError.decoding(error.localizedDescription)
-        }
+        return all
     }
 
     public static func fetchNote(id: String) async throws -> NoteItem {

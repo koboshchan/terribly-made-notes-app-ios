@@ -333,7 +333,7 @@ public struct HomeView: View {
             self.errorMessage = nil
 
             // Persist to local cache for instant cold start
-            LocalDataCache.shared.saveNotes(fetchedNotes)
+            LocalDataCache.shared.saveNotes(fetchedNotes, isComplete: true)
             LocalDataCache.shared.saveClasses(fetchedClasses)
 
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -368,12 +368,27 @@ public struct HomeView: View {
                     backoff.reset()
                     continue
                 }
-                guard let updatedNotes = try? await APIClient.fetchNotes(), !Task.isCancelled else { continue }
-                let stillProcessing = Set(updatedNotes.filter(\.isProcessing).map(\.id))
-                if stillProcessing != processingIds { backoff.reset() }
+                // Poll only the in-flight notes (cheap progress endpoint) and
+                // refetch a single note when it settles, instead of the full list.
+                var settled: [NoteItem] = []
+                for id in processingIds {
+                    if Task.isCancelled { break }
+                    guard let progress = try? await APIClient.fetchProgress(id: id) else { continue }
+                    // No job status (job gone) or a terminal one: read the note itself.
+                    let inFlight: Set<String> = ["processing", "queued", "active", "pending", "waiting"]
+                    if progress.status.map({ !inFlight.contains($0) }) ?? true,
+                       let fresh = try? await APIClient.fetchNote(id: id) {
+                        settled.append(fresh)
+                    }
+                }
+                guard !Task.isCancelled, !settled.isEmpty else { continue }
+                backoff.reset()
                 await MainActor.run {
-                    self.notes = updatedNotes
-                    LocalDataCache.shared.saveNotes(updatedNotes)
+                    for fresh in settled {
+                        if let i = notes.firstIndex(where: { $0.id == fresh.id }) { notes[i] = fresh }
+                    }
+                    // Partial update: never reconcile deletions from it.
+                    LocalDataCache.shared.saveNotes(notes, isComplete: false)
                 }
             }
         }

@@ -102,20 +102,35 @@ public final class LocalDataCache: @unchecked Sendable {
         return decode([NoteItem].self, from: data)
     }
 
-    /// Saves the authoritative server list. Detail files for notes that no
-    /// longer exist (deleted on the web or another device) are removed.
-    public func saveNotes(_ notes: [NoteItem]) {
+    /// Saves the note list.
+    ///
+    /// `isComplete` must only be true when every page was fetched; only then
+    /// are cached details for notes missing from the list deleted. A partial
+    /// list (one page, or a polling update) never reconciles deletions.
+    ///
+    /// List entries are summaries (no content/study material), so they never
+    /// overwrite a cached detail. A cached detail whose updatedAt or status no
+    /// longer matches the summary is dropped so the detail view refetches
+    /// instead of showing stale content. Full notes are stored as details.
+    public func saveNotes(_ notes: [NoteItem], isComplete: Bool) {
         guard let url = notesFileURL, let data = encode(notes) else { return }
         try? data.write(to: url, options: Self.writeOptions)
-        reconcileDetails(keeping: Set(notes.map(\.id)))
-
-        // The list endpoint returns full note documents, so each entry is
-        // authoritative: replace the detail rather than merging, otherwise a
-        // field the server cleared (error after a retry, removed class) would
-        // be resurrected from the old copy.
-        for note in notes {
-            saveNoteDetail(note)
+        if isComplete {
+            reconcileDetails(keeping: Set(notes.map(\.id)))
         }
+        for note in notes {
+            if !note.isSummary {
+                saveNoteDetail(note)
+            } else if let cached = loadNoteDetail(id: note.id),
+                      cached.updatedAt != note.updatedAt || cached.status != note.status {
+                removeDetailOnly(id: note.id)
+            }
+        }
+    }
+
+    private func removeDetailOnly(id: String) {
+        guard let url = detailFileURL(id: id) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     // MARK: - Classes List
@@ -167,7 +182,7 @@ public final class LocalDataCache: @unchecked Sendable {
 
         if var cachedNotes = loadNotes() {
             cachedNotes.removeAll { $0.id == id }
-            saveNotes(cachedNotes)
+            saveNotes(cachedNotes, isComplete: false)
         }
         if let t = transcriptFileURL(id: id) { try? FileManager.default.removeItem(at: t) }
     }
