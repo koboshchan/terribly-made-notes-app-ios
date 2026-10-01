@@ -282,7 +282,7 @@ public enum APIClient {
             record = try BackgroundUploader.stage(
                 audioFile: fileURL,
                 displayName: fileURL.lastPathComponent,
-                fields: ["language": language]
+                fields: uploadFields(language: language, noteClass: noteClass)
             )
         } catch {
             throw APIError.fileNotFound
@@ -298,12 +298,16 @@ public enum APIClient {
         } catch {
             throw APIError.network(error.localizedDescription)
         }
-        // If a class was chosen, assign the note to the class
-        if let noteClass, !noteClass.isEmpty {
-            try? await updateNoteClass(id: noteId, noteClass: noteClass)
-        }
-
         return noteId
+    }
+
+    /// The server reads `className` from the upload form and stores it with
+    /// classificationSource = "manual", so the class is set atomically instead
+    /// of with a follow-up PATCH whose failure used to be swallowed.
+    static func uploadFields(language: String, noteClass: String?) -> [String: String] {
+        var fields = ["language": language]
+        if let noteClass, !noteClass.isEmpty { fields["className"] = noteClass }
+        return fields
     }
 
     /// Restarts queued uploads (from the share extension, an expired session,
