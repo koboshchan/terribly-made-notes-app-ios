@@ -14,6 +14,8 @@ public struct HomeView: View {
     @State private var retryingNoteIds: Set<String> = []
     @State private var noteToAssignClass: NoteItem?
     @State private var showAssignClassDialog = false
+    @State private var pollingTask: Task<Void, Never>?
+    @Environment(\.scenePhase) private var scenePhase
 
     public init() {
         let cachedNotes = LocalDataCache.shared.loadNotes() ?? []
@@ -175,6 +177,15 @@ public struct HomeView: View {
             .task {
                 await refreshAllData()
                 startBackgroundPolling()
+            }
+            .onDisappear { stopBackgroundPolling() }
+            .onChange(of: scenePhase) { _, phase in
+                // Don't poll while backgrounded; catch up when returning.
+                if phase == .active {
+                    startBackgroundPolling()
+                } else if phase == .background {
+                    stopBackgroundPolling()
+                }
             }
             .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
                 if isConnected && isNetworkUnreachable {
@@ -340,20 +351,32 @@ public struct HomeView: View {
     }
 
     private func startBackgroundPolling() {
-        Task {
+        pollingTask?.cancel()
+        pollingTask = Task {
+            var backoff = PollingBackoff(base: 4)
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                let hasProcessing = await MainActor.run { notes.contains { $0.isProcessing } }
-                if hasProcessing {
-                    if let updatedNotes = try? await APIClient.fetchNotes() {
-                        await MainActor.run {
-                            self.notes = updatedNotes
-                            LocalDataCache.shared.saveNotes(updatedNotes)
-                        }
-                    }
+                try? await Task.sleep(nanoseconds: backoff.nextDelayNanoseconds())
+                if Task.isCancelled { break }
+                let processingIds = await MainActor.run { Set(notes.filter(\.isProcessing).map(\.id)) }
+                guard !processingIds.isEmpty else {
+                    // Nothing in flight: keep checking cheaply without network calls.
+                    backoff.reset()
+                    continue
+                }
+                guard let updatedNotes = try? await APIClient.fetchNotes(), !Task.isCancelled else { continue }
+                let stillProcessing = Set(updatedNotes.filter(\.isProcessing).map(\.id))
+                if stillProcessing != processingIds { backoff.reset() }
+                await MainActor.run {
+                    self.notes = updatedNotes
+                    LocalDataCache.shared.saveNotes(updatedNotes)
                 }
             }
         }
+    }
+
+    private func stopBackgroundPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 
     private func deleteNote(_ note: NoteItem) {
