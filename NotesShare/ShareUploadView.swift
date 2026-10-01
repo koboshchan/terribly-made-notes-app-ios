@@ -156,7 +156,9 @@ public struct ShareUploadView: View {
 
     private func startUploadProcess() {
         guard let token = ShareUploader.storedAuthToken(), !token.isEmpty else {
-            self.errorMessage = "Please open the Notes app and sign in first to enable automatic uploads from Voice Memos."
+            self.errorMessage = ShareUploader.hasAnySession
+                ? "Your Notes session expired. Open the Notes app once to refresh it, then share again."
+                : "Please open the Notes app and sign in first to enable automatic uploads from Voice Memos."
             self.isProcessing = false
             return
         }

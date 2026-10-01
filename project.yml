@@ -34,6 +34,7 @@ targets:
     sources:
       - path: Notes
       - path: Notes.icon
+      - path: Shared
     dependencies:
       - package: Clerk
         product: ClerkKit
@@ -71,6 +72,7 @@ targets:
     platform: iOS
     sources:
       - path: NotesShare
+      - path: Shared
     info:
       path: NotesShare/Info.plist
       properties:

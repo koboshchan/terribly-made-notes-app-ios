@@ -4,5 +4,6 @@ import Foundation
 enum SessionCleanup {
     static func signedOut() {
         LocalDataCache.shared.clearAll()
+        SharedAuthStore.clear()
     }
 }

@@ -25,9 +25,14 @@ public enum ShareUploader {
     private static let baseURL = URL(string: "https://notes.kobosh.com")!
     private static let appGroupSuite = "group.com.kobosh.notes"
 
+    /// Returns the shared token only if it has not expired. Nil means the user
+    /// must open the main app (signed out, or token too old to refresh here).
     public static func storedAuthToken() -> String? {
-        UserDefaults(suiteName: appGroupSuite)?.string(forKey: "clerkToken")
+        guard let credential = SharedAuthStore.load(), credential.isUsable else { return nil }
+        return credential.token
     }
+
+    public static var hasAnySession: Bool { SharedAuthStore.load() != nil }
 
     public static func upload(file: SharedAudioFile, token: String) async throws -> String {
         guard let fileData = try? Data(contentsOf: file.url) else {
@@ -64,6 +69,10 @@ public enum ShareUploader {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw NSError(domain: "ShareExtension", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server response"])
+        }
+
+        if http.statusCode == 401 {
+            throw NSError(domain: "ShareExtension", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired. Open Notes to sign in again, then share the file again."])
         }
 
         guard (200..<300).contains(http.statusCode) else {

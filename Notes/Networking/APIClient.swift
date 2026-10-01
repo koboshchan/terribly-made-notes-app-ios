@@ -3,6 +3,7 @@ import ClerkKit
 
 public enum APIError: LocalizedError, Sendable {
     case notSignedIn
+    case sessionExpired
     case network(String)
     case server(String)
     case decoding(String)
@@ -13,6 +14,8 @@ public enum APIError: LocalizedError, Sendable {
         switch self {
         case .notSignedIn:
             return "You are not signed in. Please sign in to continue."
+        case .sessionExpired:
+            return "Your session expired. Please sign in again."
         case .network(let message):
             return "Internet is not reachable: \(message)"
         case .server(let message):
@@ -64,17 +67,33 @@ public enum APIClient {
     // MARK: - Core Request Builder
 
     public static func authorizedRequest(path: String, method: String = "GET") async throws -> URLRequest {
-        guard let token = try await Clerk.shared.session?.getToken() else {
-            throw APIError.notSignedIn
-        }
-
-        UserDefaults(suiteName: "group.com.kobosh.notes")?.setValue(token, forKey: "clerkToken")
-
         let fullURL = AppConfig.baseURL.appendingPathComponent(path)
+        return try await authorizedRequest(url: fullURL, method: method)
+    }
+
+    public static func authorizedRequest(url fullURL: URL, method: String = "GET") async throws -> URLRequest {
+        let token = try await currentToken()
         var request = URLRequest(url: fullURL)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request
+    }
+
+    /// Fetches a fresh Clerk token and mirrors it to the shared Keychain so the
+    /// share extension can use it while it is still valid.
+    static func currentToken() async throws -> String {
+        guard let session = Clerk.shared.session else { throw APIError.notSignedIn }
+        guard let token = try await session.getToken() else { throw APIError.sessionExpired }
+        SharedAuthStore.save(token: token, userId: Clerk.shared.user?.id)
+        return token
+    }
+
+    static func checkStatus(_ http: HTTPURLResponse, data: Data) throws {
+        if http.statusCode == 401 { throw APIError.sessionExpired }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
+            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
+        }
     }
 
     private static func send<T: Decodable>(_ request: URLRequest) async throws -> T {
@@ -91,10 +110,7 @@ public enum APIClient {
             throw APIError.invalidResponse
         }
 
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-        }
+        try checkStatus(http, data: data)
 
         do {
             return try decoder.decode(T.self, from: data)
@@ -119,10 +135,7 @@ public enum APIClient {
             throw APIError.invalidResponse
         }
 
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-        }
+        try checkStatus(http, data: data)
     }
 
     // MARK: - Notes Endpoints
@@ -142,13 +155,7 @@ public enum APIClient {
             throw APIError.invalidResponse
         }
 
-        guard let token = try await Clerk.shared.session?.getToken() else {
-            throw APIError.notSignedIn
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let request = try await authorizedRequest(url: url)
 
         let (data, response): (Data, URLResponse)
         do {
@@ -162,10 +169,7 @@ public enum APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-        }
+        try checkStatus(http, data: data)
 
         if let direct = try? decoder.decode([NoteItem].self, from: data) {
             return direct
