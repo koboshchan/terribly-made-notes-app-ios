@@ -28,6 +28,7 @@ public enum MultipartFileBuilder {
         try? fm.removeItem(at: destination)
         fm.createFile(atPath: destination.path, contents: nil,
                       attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        UploadStore.excludeFromBackup(destination)
         let out = try FileHandle(forWritingTo: destination)
         defer { try? out.close() }
 

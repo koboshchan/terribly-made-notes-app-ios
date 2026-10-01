@@ -287,7 +287,9 @@ public enum APIClient {
             record = try BackgroundUploader.stage(
                 audioFile: fileURL,
                 displayName: fileURL.lastPathComponent,
-                fields: uploadFields(language: language, noteClass: noteClass)
+                fields: uploadFields(language: language, noteClass: noteClass),
+                ownerUserId: Clerk.shared.user?.id,
+                server: AppConfig.baseURL
             )
         } catch {
             throw APIError.fileNotFound
@@ -297,7 +299,7 @@ public enum APIClient {
         let noteId: String
         do {
             noteId = try await BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
-                .upload(recordId: record.id, token: token, baseURL: AppConfig.baseURL)
+                .upload(recordId: record.id, token: token, userId: Clerk.shared.user?.id, baseURL: AppConfig.baseURL)
         } catch let err as UploadServerError {
             throw err.statusCode == 401 ? APIError.sessionExpired : APIError.server(err.message)
         } catch {
@@ -323,9 +325,11 @@ public enum APIClient {
         store.prune()
         let candidates = store.all().filter { [.pending, .needsAuth, .uploading].contains($0.status) }
         guard !candidates.isEmpty, let token = try? await currentToken() else { return }
+        let userId = Clerk.shared.user?.id
         let uploader = BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
         for record in candidates {
-            uploader.start(recordId: record.id, token: token, baseURL: AppConfig.baseURL)
+            // start() refuses (and marks failed) records owned by another account/server.
+            uploader.start(recordId: record.id, token: token, userId: userId, baseURL: AppConfig.baseURL)
         }
     }
 }

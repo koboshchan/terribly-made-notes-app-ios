@@ -44,7 +44,9 @@ public enum ShareUploader {
     /// loaded fully in memory) and returns the durable record.
     public static func stage(file: SharedAudioFile) throws -> UploadRecord {
         do {
-            return try BackgroundUploader.stage(audioFile: file.url, displayName: file.name, fields: ["language": preferredLanguage])
+            return try BackgroundUploader.stage(audioFile: file.url, displayName: file.name,
+                                                fields: ["language": preferredLanguage],
+                                                ownerUserId: SharedAuthStore.load()?.userId, server: baseURL)
         } catch {
             throw NSError(domain: "ShareExtension", code: 404, userInfo: [NSLocalizedDescriptionKey: "Could not read audio file: \(file.name)"])
         }
@@ -60,7 +62,7 @@ public enum ShareUploader {
     public static func upload(record: UploadRecord, token: String) async throws -> String {
         do {
             return try await BackgroundUploader.shared(identifier: BackgroundUploader.shareSessionID)
-                .upload(recordId: record.id, token: token, baseURL: baseURL)
+                .upload(recordId: record.id, token: token, userId: SharedAuthStore.load()?.userId, baseURL: baseURL)
         } catch let err as UploadServerError where err.statusCode == 401 {
             throw NSError(domain: "ShareExtension", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired. Open Notes and the upload will finish automatically."])
         }

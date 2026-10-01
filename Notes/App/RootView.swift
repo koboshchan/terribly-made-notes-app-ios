@@ -43,8 +43,10 @@ struct RootView: View {
             // Signed out, or switched accounts: drop everything the previous
             // session left on disk.
             if newId == nil || (oldId != nil && oldId != newId) {
-                SessionCleanup.signedOut()
-                if let newId { LocalDataCache.shared.setScope(userId: newId) }
+                Task { @MainActor in
+                    await SessionCleanup.signedOut()
+                    if let newId { LocalDataCache.shared.setScope(userId: newId) }
+                }
             }
         }
     }

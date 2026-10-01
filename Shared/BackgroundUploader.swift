@@ -54,7 +54,8 @@ public final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchec
 
     /// Streams the audio into a multipart body inside the app group container
     /// and records it as pending.
-    public static func stage(audioFile: URL, displayName: String, fields: [String: String]) throws -> UploadRecord {
+    public static func stage(audioFile: URL, displayName: String, fields: [String: String],
+                             ownerUserId: String?, server: URL) throws -> UploadRecord {
         let id = UUID().uuidString
         let boundary = "Boundary-\(id)"
         let bodyName = "\(id).multipart"
@@ -71,7 +72,8 @@ public final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchec
         let record = UploadRecord(
             id: id, displayName: displayName, bodyPath: bodyName, boundary: boundary,
             fields: fields, status: .pending, noteId: nil, bytesSent: 0, totalBytes: size,
-            error: nil, attempts: 0, createdAt: Date()
+            error: nil, attempts: 0, createdAt: Date(),
+            ownerUserId: ownerUserId, server: server.absoluteString
         )
         store.upsert(record)
         return record
@@ -80,8 +82,22 @@ public final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchec
     // MARK: - Start
 
     /// Starts (or restarts) an upload and returns immediately.
-    public func start(recordId: String, token: String, baseURL: URL) {
-        guard let record = UploadStore.shared.record(id: recordId) else { return }
+    /// `userId` is the account the token belongs to; records staged by a
+    /// different account or for a different server are refused so an old
+    /// queue can never be sent with someone else's session.
+    public func start(recordId: String, token: String, userId: String?, baseURL: URL) {
+        guard let record = UploadStore.shared.record(id: recordId) else {
+            failWaiter(recordId, UploadServerError(statusCode: 0, message: "Upload no longer exists."))
+            return
+        }
+        guard record.belongs(to: userId, server: baseURL) else {
+            UploadStore.shared.update(id: recordId) {
+                $0.status = .failed
+                $0.error = "This upload belongs to a different account or server."
+            }
+            failWaiter(recordId, UploadServerError(statusCode: 403, message: "This upload belongs to a different account or server."))
+            return
+        }
         // Don't create a second task for an upload already in flight.
         session.getAllTasks { [self] tasks in
             if tasks.contains(where: { $0.taskDescription == recordId && $0.state == .running }) { return }
@@ -103,11 +119,28 @@ public final class BackgroundUploader: NSObject, URLSessionDataDelegate, @unchec
     }
 
     /// Starts an upload and waits for the server's note id.
-    public func upload(recordId: String, token: String, baseURL: URL) async throws -> String {
+    public func upload(recordId: String, token: String, userId: String?, baseURL: URL) async throws -> String {
         try await withCheckedThrowingContinuation { cont in
             stateLock.lock(); waiters[recordId] = cont; stateLock.unlock()
-            start(recordId: recordId, token: token, baseURL: baseURL)
+            start(recordId: recordId, token: token, userId: userId, baseURL: baseURL)
         }
+    }
+
+    private func failWaiter(_ id: String, _ error: Error) {
+        stateLock.lock(); let w = waiters.removeValue(forKey: id); stateLock.unlock()
+        w?.resume(throwing: error)
+    }
+
+    /// Cancels every task on this session and waits until cancellation has
+    /// been issued (sign-out: no request may go out with the old token after
+    /// the queue is cleared).
+    public func cancelAll() async {
+        let tasks = await session.allTasks
+        for task in tasks { task.cancel() }
+        stateLock.lock()
+        let pending = waiters; waiters.removeAll(); responseData.removeAll()
+        stateLock.unlock()
+        for (_, w) in pending { w.resume(throwing: CancellationError()) }
     }
 
     // MARK: - URLSessionDataDelegate
