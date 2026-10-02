@@ -8,6 +8,7 @@
 	</array>
 	<key>keychain-access-groups</key>
 	<array>
+		<string>$(AppIdentifierPrefix)com.kobosh.notes</string>
 		<string>$(AppIdentifierPrefix)group.com.kobosh.notes</string>
 	</array>
 </dict>
