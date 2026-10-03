@@ -3,6 +3,7 @@ import ClerkKit
 
 public enum APIError: LocalizedError, Sendable {
     case notSignedIn
+    case sessionExpired
     case network(String)
     case server(String)
     case decoding(String)
@@ -13,6 +14,8 @@ public enum APIError: LocalizedError, Sendable {
         switch self {
         case .notSignedIn:
             return "You are not signed in. Please sign in to continue."
+        case .sessionExpired:
+            return "Your session expired. Please sign in again."
         case .network(let message):
             return "Internet is not reachable: \(message)"
         case .server(let message):
@@ -64,17 +67,39 @@ public enum APIClient {
     // MARK: - Core Request Builder
 
     public static func authorizedRequest(path: String, method: String = "GET") async throws -> URLRequest {
-        guard let token = try await Clerk.shared.session?.getToken() else {
-            throw APIError.notSignedIn
-        }
-
-        UserDefaults(suiteName: "group.com.kobosh.notes")?.setValue(token, forKey: "clerkToken")
-
         let fullURL = AppConfig.baseURL.appendingPathComponent(path)
+        return try await authorizedRequest(url: fullURL, method: method)
+    }
+
+    public static func authorizedRequest(url fullURL: URL, method: String = "GET") async throws -> URLRequest {
+        let token = try await currentToken()
         var request = URLRequest(url: fullURL)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return request
+    }
+
+    /// Fetches a fresh Clerk token and mirrors it to the shared Keychain so the
+    /// share extension can use it while it is still valid.
+    static func currentToken() async throws -> String {
+        guard let session = await Clerk.shared.session else { throw APIError.notSignedIn }
+        guard let token = try await session.getToken() else { throw APIError.sessionExpired }
+        do {
+            let userId = await Clerk.shared.user?.id
+            try SharedAuthStore.save(token: token, userId: userId)
+        } catch {
+            // The app itself can continue; only the share extension loses access.
+            print("Shared session mirror failed: \(error.localizedDescription)")
+        }
+        return token
+    }
+
+    static func checkStatus(_ http: HTTPURLResponse, data: Data) throws {
+        if http.statusCode == 401 { throw APIError.sessionExpired }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
+            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
+        }
     }
 
     private static func send<T: Decodable>(_ request: URLRequest) async throws -> T {
@@ -91,10 +116,7 @@ public enum APIClient {
             throw APIError.invalidResponse
         }
 
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-        }
+        try checkStatus(http, data: data)
 
         do {
             return try decoder.decode(T.self, from: data)
@@ -119,67 +141,75 @@ public enum APIClient {
             throw APIError.invalidResponse
         }
 
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-        }
+        try checkStatus(http, data: data)
     }
 
     // MARK: - Notes Endpoints
 
-    public static func fetchNotes(search: String? = nil, sortBy: String = "uploaded", sortOrder: String = "desc") async throws -> [NoteItem] {
+    public struct NotesPage: Sendable {
+        public let notes: [NoteItem]
+        public let hasMore: Bool
+    }
+
+    /// One page of note summaries (server default and max page size 50/100;
+    /// content and study material are not included).
+    public static func fetchNotesPage(
+        page: Int,
+        limit: Int = 50,
+        search: String? = nil,
+        sortBy: String = "uploaded",
+        sortOrder: String = "desc"
+    ) async throws -> NotesPage {
         var components = URLComponents(url: AppConfig.baseURL.appendingPathComponent("/api/notes"), resolvingAgainstBaseURL: true)!
         var queryItems = [
             URLQueryItem(name: "sortBy", value: sortBy),
-            URLQueryItem(name: "sortOrder", value: sortOrder)
+            URLQueryItem(name: "sortOrder", value: sortOrder),
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "limit", value: String(limit))
         ]
         if let search, !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             queryItems.append(URLQueryItem(name: "search", value: search))
         }
         components.queryItems = queryItems
+        guard let url = components.url else { throw APIError.invalidResponse }
 
-        guard let url = components.url else {
-            throw APIError.invalidResponse
-        }
-
-        guard let token = try await Clerk.shared.session?.getToken() else {
-            throw APIError.notSignedIn
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
+        let request = try await authorizedRequest(url: url)
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: request)
-        } catch let urlErr as URLError {
-            throw APIError.network(urlErr.localizedDescription)
         } catch {
             throw APIError.network(error.localizedDescription)
         }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        try checkStatus(http, data: data)
 
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.invalidResponse
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
-            throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
-        }
-
+        let hasMore = http.value(forHTTPHeaderField: "X-Has-More")?.lowercased() == "true"
+        let notes: [NoteItem]
         if let direct = try? decoder.decode([NoteItem].self, from: data) {
-            return direct
+            notes = direct
+        } else if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
+            notes = lossy.compactMap(\.value)
+        } else {
+            throw APIError.decoding("Could not decode notes page")
         }
+        return NotesPage(notes: notes, hasMore: hasMore)
+    }
 
-        if let lossy = try? decoder.decode([LossyItem<NoteItem>].self, from: data) {
-            return lossy.compactMap(\.value)
+    /// Fetches every page. The result is a complete list, so callers may
+    /// reconcile deletions against it. Throws if any page fails (a partial
+    /// list must never be treated as complete).
+    public static func fetchNotes(search: String? = nil, sortBy: String = "uploaded", sortOrder: String = "desc") async throws -> [NoteItem] {
+        var all: [NoteItem] = []
+        var seen = Set<String>()
+        var page = 0
+        while true {
+            try Task.checkCancellation()
+            let result = try await fetchNotesPage(page: page, limit: 100, search: search, sortBy: sortBy, sortOrder: sortOrder)
+            for note in result.notes where seen.insert(note.id).inserted { all.append(note) }
+            guard result.hasMore, !result.notes.isEmpty, page < 500 else { break }
+            page += 1
         }
-
-        do {
-            return try decoder.decode([NoteItem].self, from: data)
-        } catch {
-            throw APIError.decoding(error.localizedDescription)
-        }
+        return all
     }
 
     public static func fetchNote(id: String) async throws -> NoteItem {
@@ -203,6 +233,54 @@ public enum APIClient {
         let body: [String: String?] = ["class": noteClass]
         request.httpBody = try encoder.encode(body)
         try await sendVoid(request)
+    }
+
+    /// Edits title and/or Markdown content (server rejects while processing).
+    public static func updateNote(id: String, title: String?, content: String?) async throws {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)", method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: String] = [:]
+        if let title { body["title"] = title }
+        if let content { body["content"] = content }
+        request.httpBody = try encoder.encode(body)
+        try await sendVoid(request)
+    }
+
+    /// Saves a corrected transcript.
+    public static func updateTranscript(id: String, transcript: String) async throws {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)/transcript", method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(["transcript": transcript])
+        try await sendVoid(request)
+    }
+
+    // MARK: - Sharing
+
+    public struct ShareInfo: Decodable, Sendable {
+        public let shareUrl: String?
+        public let shareEnabled: Bool?
+        public let shareExpiresAt: String?
+        public let shareAllowChat: Bool?
+    }
+
+    private struct ShareBody: Encodable {
+        let allowChat: Bool
+    }
+
+    public static func fetchShare(id: String) async throws -> ShareInfo {
+        try await send(try await authorizedRequest(path: "/api/notes/\(id)/share"))
+    }
+
+    /// Creates (or updates) the read-only link, keeping the existing token.
+    public static func createShare(id: String, allowChat: Bool = false) async throws -> ShareInfo {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)/share", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(ShareBody(allowChat: allowChat))
+        return try await send(request)
+    }
+
+    public static func deleteShare(id: String) async throws {
+        try await sendVoid(try await authorizedRequest(path: "/api/notes/\(id)/share", method: "DELETE"))
     }
 
     public static func fetchTranscript(id: String) async throws -> String {
@@ -273,63 +351,55 @@ public enum APIClient {
         language: String = "english",
         noteClass: String? = nil
     ) async throws -> String {
-        let didStartAccessing = fileURL.startAccessingSecurityScopedResource()
-        defer {
-            if didStartAccessing {
-                fileURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        guard let fileData = try? Data(contentsOf: fileURL) else {
+        let currentUserId = await Clerk.shared.user?.id
+        let record: UploadRecord
+        do {
+            record = try BackgroundUploader.stage(
+                audioFile: fileURL,
+                displayName: fileURL.lastPathComponent,
+                fields: uploadFields(language: language, noteClass: noteClass),
+                ownerUserId: currentUserId,
+                server: AppConfig.baseURL
+            )
+        } catch {
             throw APIError.fileNotFound
         }
 
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var request = try await authorizedRequest(path: "/api/upload", method: "POST")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-
-        let filename = fileURL.lastPathComponent
-        let mimeType = mimeTypeFor(url: fileURL)
-
-        var body = Data()
-
-        // Append language field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(language)\r\n".data(using: .utf8)!)
-
-        // Append file field
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-        body.append(fileData)
-        body.append("\r\n".data(using: .utf8)!)
-
-        // Close multipart boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
-        request.httpBody = body
-
-        let uploadRes: UploadResponse = try await send(request)
-
-        // If a class was chosen, assign the note to the class
-        if let noteClass, !noteClass.isEmpty {
-            try? await updateNoteClass(id: uploadRes.noteId, noteClass: noteClass)
+        let token = try await currentToken()
+        let noteId: String
+        do {
+            noteId = try await BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
+                .upload(recordId: record.id, token: token, userId: currentUserId, baseURL: AppConfig.baseURL)
+        } catch let err as UploadServerError {
+            throw err.statusCode == 401 ? APIError.sessionExpired : APIError.server(err.message)
+        } catch {
+            throw APIError.network(error.localizedDescription)
         }
-
-        return uploadRes.noteId
+        return noteId
     }
 
-    private static func mimeTypeFor(url: URL) -> String {
-        let ext = url.pathExtension.lowercased()
-        switch ext {
-        case "m4a": return "audio/m4a"
-        case "mp3": return "audio/mpeg"
-        case "wav": return "audio/wav"
-        case "aac": return "audio/aac"
-        case "flac": return "audio/flac"
-        case "ogg": return "audio/ogg"
-        default: return "audio/m4a"
+    /// The server reads `className` from the upload form and stores it with
+    /// classificationSource = "manual", so the class is set atomically instead
+    /// of with a follow-up PATCH whose failure used to be swallowed.
+    static func uploadFields(language: String, noteClass: String?) -> [String: String] {
+        var fields = ["language": language]
+        if let noteClass, !noteClass.isEmpty { fields["className"] = noteClass }
+        return fields
+    }
+
+    /// Restarts queued uploads (from the share extension, an expired session,
+    /// or a process that died mid-upload). Safe to call repeatedly: records in
+    /// flight are skipped and the Idempotency-Key is reused.
+    public static func resumeQueuedUploads() async {
+        let store = UploadStore.shared
+        store.prune()
+        let candidates = store.all().filter { [.pending, .needsAuth, .uploading].contains($0.status) }
+        guard !candidates.isEmpty, let token = try? await currentToken() else { return }
+        let userId = await Clerk.shared.user?.id
+        let uploader = BackgroundUploader.shared(identifier: BackgroundUploader.appSessionID)
+        for record in candidates {
+            // start() refuses (and marks failed) records owned by another account/server.
+            uploader.start(recordId: record.id, token: token, userId: userId, baseURL: AppConfig.baseURL)
         }
     }
 }

@@ -14,6 +14,8 @@ public struct HomeView: View {
     @State private var retryingNoteIds: Set<String> = []
     @State private var noteToAssignClass: NoteItem?
     @State private var showAssignClassDialog = false
+    @State private var pollingTask: Task<Void, Never>?
+    @Environment(\.scenePhase) private var scenePhase
 
     public init() {
         let cachedNotes = LocalDataCache.shared.loadNotes() ?? []
@@ -127,6 +129,8 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: selectedClassFilter == "All" ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
+                    .accessibilityLabel("Filter by class")
+                    .accessibilityValue(selectedClassFilter == "All" ? "All notes" : selectedClassFilter)
 
                     // Classes Manager
                     Button {
@@ -134,6 +138,7 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: "folder")
                     }
+                    .accessibilityLabel("Manage classes")
 
                     // Record Note
                     Button {
@@ -141,6 +146,8 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: "mic.badge.plus")
                     }
+                    .accessibilityLabel("New note")
+                    .accessibilityHint("Record or import audio")
                 }
             }
             .sheet(isPresented: $showRecordSheet) {
@@ -175,6 +182,15 @@ public struct HomeView: View {
             .task {
                 await refreshAllData()
                 startBackgroundPolling()
+            }
+            .onDisappear { stopBackgroundPolling() }
+            .onChange(of: scenePhase) { _, phase in
+                // Don't poll while backgrounded; catch up when returning.
+                if phase == .active {
+                    startBackgroundPolling()
+                } else if phase == .background {
+                    stopBackgroundPolling()
+                }
             }
             .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
                 if isConnected && isNetworkUnreachable {
@@ -317,7 +333,7 @@ public struct HomeView: View {
             self.errorMessage = nil
 
             // Persist to local cache for instant cold start
-            LocalDataCache.shared.saveNotes(fetchedNotes)
+            LocalDataCache.shared.saveNotes(fetchedNotes, isComplete: true)
             LocalDataCache.shared.saveClasses(fetchedClasses)
 
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -340,20 +356,47 @@ public struct HomeView: View {
     }
 
     private func startBackgroundPolling() {
-        Task {
+        pollingTask?.cancel()
+        pollingTask = Task {
+            var backoff = PollingBackoff(base: 4)
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                let hasProcessing = await MainActor.run { notes.contains { $0.isProcessing } }
-                if hasProcessing {
-                    if let updatedNotes = try? await APIClient.fetchNotes() {
-                        await MainActor.run {
-                            self.notes = updatedNotes
-                            LocalDataCache.shared.saveNotes(updatedNotes)
-                        }
+                try? await Task.sleep(nanoseconds: backoff.nextDelayNanoseconds())
+                if Task.isCancelled { break }
+                let processingIds = await MainActor.run { Set(notes.filter(\.isProcessing).map(\.id)) }
+                guard !processingIds.isEmpty else {
+                    // Nothing in flight: keep checking cheaply without network calls.
+                    backoff.reset()
+                    continue
+                }
+                // Poll only the in-flight notes (cheap progress endpoint) and
+                // refetch a single note when it settles, instead of the full list.
+                var settled: [NoteItem] = []
+                for id in processingIds {
+                    if Task.isCancelled { break }
+                    guard let progress = try? await APIClient.fetchProgress(id: id) else { continue }
+                    // No job status (job gone) or a terminal one: read the note itself.
+                    let inFlight: Set<String> = ["processing", "queued", "active", "pending", "waiting"]
+                    if progress.status.map({ !inFlight.contains($0) }) ?? true,
+                       let fresh = try? await APIClient.fetchNote(id: id) {
+                        settled.append(fresh)
                     }
+                }
+                guard !Task.isCancelled, !settled.isEmpty else { continue }
+                backoff.reset()
+                await MainActor.run {
+                    for fresh in settled {
+                        if let i = notes.firstIndex(where: { $0.id == fresh.id }) { notes[i] = fresh }
+                    }
+                    // Partial update: never reconcile deletions from it.
+                    LocalDataCache.shared.saveNotes(notes, isComplete: false)
                 }
             }
         }
+    }
+
+    private func stopBackgroundPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 
     private func deleteNote(_ note: NoteItem) {

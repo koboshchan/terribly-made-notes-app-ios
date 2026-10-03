@@ -13,8 +13,12 @@ public struct NoteDetailView: View {
     @State private var isDeleting = false
     @State private var showDeleteConfirmation = false
     @State private var showClassPicker = false
+    @State private var showEditor = false
+    @State private var showShareSheet = false
     @State private var availableClasses: [UserClass]
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var pollingTask: Task<Void, Never>?
 
     public init(noteId: String) {
         self.noteId = noteId
@@ -99,6 +103,25 @@ public struct NoteDetailView: View {
                         }
                     }
 
+                    if let note, note.content?.isEmpty == false, let file = NoteMarkdownExport.file(for: note) {
+                        ShareLink(item: file) {
+                            Label("Export Markdown", systemImage: "square.and.arrow.up")
+                        }
+                    }
+
+                    if note?.isCompleted == true {
+                        Button {
+                            showEditor = true
+                        } label: {
+                            Label("Edit Note", systemImage: "pencil")
+                        }
+                        Button {
+                            showShareSheet = true
+                        } label: {
+                            Label("Share Link", systemImage: "link")
+                        }
+                    }
+
                     if note?.isError == true {
                         Button {
                             retryProcessing()
@@ -115,7 +138,28 @@ public struct NoteDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .accessibilityLabel("Note actions")
             }
+        }
+        .sheet(isPresented: $showEditor) {
+            if let note {
+                TextCorrectionView(
+                    title: "Edit Note",
+                    showsTitleField: true,
+                    editedTitle: note.title,
+                    text: note.content ?? ""
+                ) { newTitle, newContent in
+                    try await APIClient.updateNote(
+                        id: noteId,
+                        title: newTitle == note.title ? nil : newTitle,
+                        content: newContent == (note.content ?? "") ? nil : newContent
+                    )
+                    loadData()
+                }
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            NoteShareView(noteId: noteId)
         }
         .confirmationDialog("Delete Note?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete Note", role: .destructive) {
@@ -132,6 +176,14 @@ public struct NoteDetailView: View {
             loadData()
             loadClasses()
             startPollingIfNeeded()
+        }
+        .onDisappear { stopPolling() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                startPollingIfNeeded()
+            } else if phase == .background {
+                stopPolling()
+            }
         }
         .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
             if isConnected && isNetworkUnreachable {
@@ -175,6 +227,7 @@ public struct NoteDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
+                    .accessibilityHidden(true)
                     .foregroundStyle(.red)
                 Text("Processing Failed")
                     .font(.headline)
@@ -307,15 +360,31 @@ public struct NoteDetailView: View {
     }
 
     private func startPollingIfNeeded() {
-        Task {
+        pollingTask?.cancel()
+        pollingTask = Task {
+            // loadData() is async; with no cached copy, wait for the first
+            // fetch instead of concluding there is nothing to poll.
+            var waited = 0
+            while note == nil, waited < 50, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                waited += 1
+            }
+
+            var backoff = PollingBackoff(base: 3)
+            var lastSignature: String?
             while !Task.isCancelled {
                 guard let note, note.isProcessing else { break }
 
                 if let prog = try? await APIClient.fetchProgress(id: noteId) {
+                    // Compare the fields that actually indicate movement.
+                    let signature = "\(prog.status ?? "")|\(prog.step ?? -1)|\(prog.percent ?? -1)"
+                    if signature != lastSignature { backoff.reset() }
+                    lastSignature = signature
                     await MainActor.run {
                         self.progress = prog
                     }
                 }
+                if Task.isCancelled { break }
 
                 if let updatedNote = try? await APIClient.fetchNote(id: noteId) {
                     await MainActor.run {
@@ -327,9 +396,14 @@ public struct NoteDetailView: View {
                     }
                 }
 
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: backoff.nextDelayNanoseconds())
             }
         }
+    }
+
+    private func stopPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 
     private func retryProcessing() {

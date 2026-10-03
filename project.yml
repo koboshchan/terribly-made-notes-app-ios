@@ -34,6 +34,7 @@ targets:
     sources:
       - path: Notes
       - path: Notes.icon
+      - path: Shared
     dependencies:
       - package: Clerk
         product: ClerkKit
@@ -53,6 +54,7 @@ targets:
         NSMicrophoneUsageDescription: "Notes uses your microphone to record audio for AI transcription and study guide generation."
         UIBackgroundModes:
           - audio
+        KeychainAccessGroup: $(AppIdentifierPrefix)group.com.kobosh.notes
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobosh.notes
@@ -71,10 +73,12 @@ targets:
     platform: iOS
     sources:
       - path: NotesShare
+      - path: Shared
     info:
       path: NotesShare/Info.plist
       properties:
         CFBundleDisplayName: Notes
+        KeychainAccessGroup: $(AppIdentifierPrefix)group.com.kobosh.notes
         NSExtension:
           NSExtensionAttributes:
             NSExtensionActivationRule:
