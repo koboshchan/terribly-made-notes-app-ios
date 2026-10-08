@@ -12,6 +12,7 @@ public struct QuizView: View {
 
     public init(questions: [QuizQuestion]) {
         self.questions = questions
+        _optionsForCurrentQuestion = State(initialValue: questions.first?.allOptions ?? [])
     }
 
     public var body: some View {
@@ -110,6 +111,13 @@ public struct QuizView: View {
                     .padding(.vertical)
                 }
 
+                if !hasSubmitted {
+                    Button("Check Answer") { submitAnswer() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selectedOption == nil)
+                        .padding(.bottom, 8)
+                }
+
                 // Next Button
                 if hasSubmitted {
                     Button {
@@ -126,9 +134,7 @@ public struct QuizView: View {
                 }
             }
         }
-        .onAppear {
-            setupQuestion()
-        }
+        .onChange(of: questions) { _, _ in restartQuiz() }
     }
 
     private func choiceButton(option: String, question: QuizQuestion) -> some View {
@@ -157,10 +163,7 @@ public struct QuizView: View {
         return Button {
             guard !hasSubmitted else { return }
             selectedOption = option
-            hasSubmitted = true
-            if isCorrect {
-                score += 1
-            }
+
         } label: {
             HStack {
                 Text(option)
@@ -190,6 +193,15 @@ public struct QuizView: View {
             .clipShape(.rect(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+        .disabled(hasSubmitted)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityValue(hasSubmitted ? (isCorrect ? "Correct answer" : (isSelected ? "Your answer, incorrect" : "")) : "")
+    }
+
+    private func submitAnswer() {
+        guard !hasSubmitted, let selectedOption, currentQuestionIndex < questions.count else { return }
+        hasSubmitted = true
+        if selectedOption == questions[currentQuestionIndex].correctAnswer { score += 1 }
     }
 
     private func setupQuestion() {
