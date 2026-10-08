@@ -22,6 +22,8 @@ public struct RecordNoteView: View {
     @State private var isUploading = false
     @State private var uploadProgressMessage = ""
     @State private var errorMessage: String?
+    @State private var showDiscardConfirmation = false
+    @State private var dismissAfterDiscard = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -88,7 +90,8 @@ public struct RecordNoteView: View {
                                 }
 
                                 Button {
-                                    resetRecording()
+                                    dismissAfterDiscard = false
+                                    showDiscardConfirmation = true
                                 } label: {
                                     Label("Re-record", systemImage: "arrow.counterclockwise")
                                         .font(.subheadline)
@@ -164,7 +167,7 @@ public struct RecordNoteView: View {
                     }
 
                     // Upload Button
-                    if let fileToUpload = recordedURL {
+                    if let fileToUpload = recordedURL, !isRecording {
                         Button {
                             uploadNote(url: fileToUpload)
                         } label: {
@@ -192,11 +195,25 @@ public struct RecordNoteView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        stopRecording()
-                        dismiss()
+                        if recordedURL != nil || isRecording {
+                            dismissAfterDiscard = true
+                            showDiscardConfirmation = true
+                        } else {
+                            dismiss()
+                        }
                     }
                     .disabled(isUploading)
                 }
+            }
+            .interactiveDismissDisabled(recordedURL != nil || isRecording || isUploading)
+            .confirmationDialog("Discard Audio?", isPresented: $showDiscardConfirmation, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) {
+                    resetRecording()
+                    if dismissAfterDiscard { dismiss() }
+                }
+                Button("Keep Audio", role: .cancel) {}
+            } message: {
+                Text("This audio has not been uploaded. Imported files will not be deleted.")
             }
             .fileImporter(
                 isPresented: $showFileImporter,
@@ -394,6 +411,9 @@ public struct RecordNoteView: View {
     // MARK: - Upload
 
     private func uploadNote(url: URL) {
+        guard !isRecording, !isUploading else { return }
+        audioPlayer?.stop()
+        isPlaying = false
         isUploading = true
         uploadProgressMessage = "Uploading audio..."
         errorMessage = nil
