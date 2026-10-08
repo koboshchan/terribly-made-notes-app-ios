@@ -9,6 +9,7 @@ public struct FlashcardsView: View {
 
     public init(flashcards: [Flashcard]) {
         self.flashcards = flashcards
+        _cards = State(initialValue: flashcards)
     }
 
     public var body: some View {
@@ -79,6 +80,7 @@ public struct FlashcardsView: View {
                         Image(systemName: "arrow.left.circle.fill")
                             .font(.system(size: 44))
                     }
+                    .accessibilityLabel("Previous card")
                     .disabled(currentIndex == 0)
 
                     Button {
@@ -86,9 +88,9 @@ public struct FlashcardsView: View {
                             isFlipped.toggle()
                         }
                     } label: {
-                        Text("Flip")
+                        Text(isFlipped ? "Question" : "Answer")
                             .font(.headline)
-                            .frame(width: 80)
+                            .frame(minWidth: 80, minHeight: 44)
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -103,6 +105,7 @@ public struct FlashcardsView: View {
                         Image(systemName: "arrow.right.circle.fill")
                             .font(.system(size: 44))
                     }
+                    .accessibilityLabel("Next card")
                     .disabled(currentIndex == cards.count - 1)
                 }
                 .padding(.top, 8)
@@ -111,8 +114,10 @@ public struct FlashcardsView: View {
             }
         }
         .padding(.vertical)
-        .onAppear {
-            cards = flashcards
+        .onChange(of: flashcards) { _, newCards in
+            cards = newCards
+            currentIndex = 0
+            isFlipped = false
         }
     }
 
