@@ -3,6 +3,7 @@ import SwiftUI
 public struct FlashcardsView: View {
     let flashcards: [Flashcard]
 
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
     @State private var currentIndex = 0
     @State private var isFlipped = false
     @State private var cards: [Flashcard] = []
@@ -29,7 +30,7 @@ public struct FlashcardsView: View {
                     Spacer()
 
                     Button {
-                        withAnimation(.spring(duration: 0.35)) {
+                        withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                             cards.shuffle()
                             currentIndex = 0
                             isFlipped = false
@@ -62,7 +63,7 @@ public struct FlashcardsView: View {
                 .padding(.horizontal)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                    withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                         isFlipped.toggle()
                     }
                 }
@@ -71,7 +72,7 @@ public struct FlashcardsView: View {
                 HStack(spacing: 40) {
                     Button {
                         if currentIndex > 0 {
-                            withAnimation(.easeInOut(duration: 0.25)) {
+                            withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                                 currentIndex -= 1
                                 isFlipped = false
                             }
@@ -84,7 +85,7 @@ public struct FlashcardsView: View {
                     .disabled(currentIndex == 0)
 
                     Button {
-                        withAnimation(.spring(duration: 0.45, bounce: 0.15)) {
+                        withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                             isFlipped.toggle()
                         }
                     } label: {
@@ -96,7 +97,7 @@ public struct FlashcardsView: View {
 
                     Button {
                         if currentIndex < cards.count - 1 {
-                            withAnimation(.easeInOut(duration: 0.25)) {
+                            withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                                 currentIndex += 1
                                 isFlipped = false
                             }
@@ -124,8 +125,8 @@ public struct FlashcardsView: View {
     @ViewBuilder
     private func cardFace(title: String, titleColor: Color, content: String) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(uiColor: .secondarySystemBackground))
+            RoundedRectangle(cornerRadius: NotebookStyle.corner)
+                .fill(NotebookStyle.paper)
                 .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
 
             VStack(spacing: 12) {
@@ -160,7 +161,7 @@ public struct FlashcardsView: View {
             .padding(20)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 320)
+        .frame(minHeight: 320, maxHeight: 440)
     }
 }
 
@@ -171,27 +172,27 @@ private struct FlipCardView<Front: View, Back: View>: View {
     @ViewBuilder let front: () -> Front
     @ViewBuilder let back: () -> Back
 
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
+
     var body: some View {
         ZStack {
             front()
                 .rotation3DEffect(
-                    .degrees(isFlipped ? 180 : 0),
+                    .degrees(reducedMotion ? 0 : (isFlipped ? 180 : 0)),
                     axis: (x: 0.0, y: 1.0, z: 0.0),
                     perspective: 0.5
                 )
                 .opacity(isFlipped ? 0 : 1)
-                .animation(.linear(duration: 0.001).delay(0.2), value: isFlipped)
                 .allowsHitTesting(!isFlipped)
                 .accessibilityHidden(isFlipped)
 
             back()
                 .rotation3DEffect(
-                    .degrees(isFlipped ? 0 : -180),
+                    .degrees(reducedMotion ? 0 : (isFlipped ? 0 : -180)),
                     axis: (x: 0.0, y: 1.0, z: 0.0),
                     perspective: 0.5
                 )
                 .opacity(isFlipped ? 1 : 0)
-                .animation(.linear(duration: 0.001).delay(0.2), value: isFlipped)
                 .allowsHitTesting(isFlipped)
                 .accessibilityHidden(!isFlipped)
         }
