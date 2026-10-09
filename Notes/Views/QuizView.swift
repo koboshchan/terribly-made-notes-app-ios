@@ -3,6 +3,7 @@ import SwiftUI
 public struct QuizView: View {
     let questions: [QuizQuestion]
 
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
     @State private var currentQuestionIndex = 0
     @State private var selectedOption: String?
     @State private var hasSubmitted = false
@@ -103,7 +104,7 @@ public struct QuizView: View {
                             }
                             .padding()
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(uiColor: .secondarySystemBackground))
+                            .background(NotebookStyle.paper)
                             .clipShape(.rect(cornerRadius: 12))
                             .padding(.horizontal)
                         }
@@ -141,7 +142,7 @@ public struct QuizView: View {
         let isSelected = selectedOption == option
         let isCorrect = option == question.correctAnswer
 
-        var backgroundColor: Color = Color(uiColor: .secondarySystemBackground)
+        var backgroundColor: Color = NotebookStyle.paper
         var borderColor: Color = .clear
         var textColor: Color = .primary
 
@@ -162,7 +163,7 @@ public struct QuizView: View {
 
         return Button {
             guard !hasSubmitted else { return }
-            selectedOption = option
+            withAnimation(NotebookStyle.motion(reduced: reducedMotion)) { selectedOption = option }
 
         } label: {
             HStack {
@@ -192,7 +193,7 @@ public struct QuizView: View {
             )
             .clipShape(.rect(cornerRadius: 12))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(NotebookPressStyle())
         .disabled(hasSubmitted)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityValue(hasSubmitted ? (isCorrect ? "Correct answer" : (isSelected ? "Your answer, incorrect" : "")) : "")

@@ -16,6 +16,7 @@ public struct NoteDetailView: View {
     @State private var availableClasses: [UserClass]
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
     @State private var pollingTask: Task<Void, Never>?
 
     public init(noteId: String) {
@@ -62,22 +63,25 @@ public struct NoteDetailView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(Array(["Notes", "Flashcards", "Quiz", "Transcript", "Ask AI"].enumerated()), id: \.offset) { index, title in
-                            Button { selectedTab = index } label: {
+                            Button {
+                                withAnimation(NotebookStyle.motion(reduced: reducedMotion)) { selectedTab = index }
+                            } label: {
                                 Text(title)
                                     .font(.subheadline.weight(.semibold))
                                     .fixedSize()
                                     .padding(.horizontal, 16)
                                     .frame(minHeight: 44)
-                                    .background(selectedTab == index ? Color.accentColor : Color(uiColor: .secondarySystemBackground), in: Capsule())
+                                    .background(selectedTab == index ? NotebookStyle.accent : NotebookStyle.paper, in: Capsule())
                                     .foregroundStyle(selectedTab == index ? Color.white : Color.primary)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(NotebookPressStyle())
                             .accessibilityAddTraits(selectedTab == index ? .isSelected : [])
                         }
                     }
                     .padding(.horizontal)
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 12)
+                .background(NotebookStyle.canvas)
 
                 // Tab Content
                 Group {
@@ -99,6 +103,8 @@ public struct NoteDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(NotebookStyle.canvas)
+        .tint(NotebookStyle.accent)
         .navigationTitle(note?.title ?? "Note")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -160,7 +166,7 @@ public struct NoteDetailView: View {
                 Task { await loadData(); startPollingIfNeeded() }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: isNetworkUnreachable)
+        .animation(NotebookStyle.motion(reduced: reducedMotion), value: isNetworkUnreachable)
     }
 
     // MARK: - Subviews
@@ -235,7 +241,41 @@ public struct NoteDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 // Metadata Header
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(note.title)
+                        .font(.title.weight(.bold))
+                        .tracking(-0.5)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ViewThatFits(in: .horizontal) {
+                        noteMetadata(note)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let cls = note.noteClass, !cls.isEmpty { Text(cls).font(.caption.bold()).foregroundStyle(NotebookStyle.accent) }
+                            if let duration = note.formattedDuration { Label(duration, systemImage: "clock").font(.caption).foregroundStyle(.secondary) }
+                            if !note.formattedDate.isEmpty { Label(note.formattedDate, systemImage: "calendar").font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                    if let desc = note.description, !desc.isEmpty {
+                        Text(desc).font(.body).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(20)
+                .notebookSurface()
+                .padding(.horizontal)
+
+                if let content = note.content, !content.isEmpty {
+                    MathMarkdownView(content)
+                } else if note.isProcessing {
+                    Text("Note content will appear once processing finishes.")
+                        .font(.subheadline).foregroundStyle(.secondary).padding()
+                } else {
+                    ContentUnavailableView("No Content", systemImage: "doc.text")
+                }
+            }
+            .padding(.vertical, 20)
+        }
+    }
+
+    private func noteMetadata(_ note: NoteItem) -> some View {
                     HStack(spacing: 8) {
                         if let cls = note.noteClass, !cls.isEmpty {
                             Text(cls)
@@ -260,29 +300,6 @@ public struct NoteDetailView: View {
                         }
                     }
 
-                    if let desc = note.description, !desc.isEmpty {
-                        Text(desc)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal)
-
-                Divider()
-
-                if let content = note.content, !content.isEmpty {
-                    MathMarkdownView(content)
-                } else if note.isProcessing {
-                    Text("Note content will appear once processing finishes.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding()
-                } else {
-                    ContentUnavailableView("No Content", systemImage: "doc.text")
-                }
-            }
-            .padding(.vertical)
-        }
     }
 
     // MARK: - Actions & Polling
@@ -296,7 +313,7 @@ public struct NoteDetailView: View {
                     self.isLoading = false
                     self.errorMessage = nil
                     LocalDataCache.shared.saveNoteDetail(fetched)
-                    withAnimation(.easeInOut(duration: 0.25)) {
+                    withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                         self.isNetworkUnreachable = false
                     }
                 }
@@ -304,7 +321,7 @@ public struct NoteDetailView: View {
                 await MainActor.run {
                     self.isLoading = false
                     let isNetwork = (error as? APIError)?.isNetworkError == true || (error as? URLError) != nil || !NetworkMonitor.shared.isConnected
-                    withAnimation(.easeInOut(duration: 0.25)) {
+                    withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                         if isNetwork {
                             self.isNetworkUnreachable = true
                         }
