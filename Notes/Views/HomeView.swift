@@ -14,6 +14,9 @@ public struct HomeView: View {
     @State private var retryingNoteIds: Set<String> = []
     @State private var noteToAssignClass: NoteItem?
     @State private var showAssignClassDialog = false
+    @State private var noteToDelete: NoteItem?
+    @State private var pollingTask: Task<Void, Never>?
+    @Environment(\.scenePhase) private var scenePhase
 
     public init() {
         let cachedNotes = LocalDataCache.shared.loadNotes() ?? []
@@ -39,26 +42,40 @@ public struct HomeView: View {
                 }
 
                 List {
-                    if let errorMessage, notes.isEmpty {
+                    if let errorMessage {
                         Text(errorMessage)
                             .foregroundStyle(.red)
                     }
 
-                    if filteredNotes.isEmpty && !isLoading {
-                        ContentUnavailableView(
-                            searchText.isEmpty ? "No Notes Found" : "No Matching Notes",
-                            systemImage: searchText.isEmpty ? "note.text.badge.plus" : "magnifyingglass",
-                            description: Text(searchText.isEmpty ? "Record or import an audio file to create your first note." : "Try a different search term or class filter.")
-                        )
+                    if isLoading && notes.isEmpty {
+                        ProgressView("Loading notes…")
+                            .frame(maxWidth: .infinity)
+                    } else if filteredNotes.isEmpty && errorMessage == nil {
+                        ContentUnavailableView {
+                            Label(hasActiveFilters ? "No Matching Notes" : "Your Notebook Is Empty",
+                                  systemImage: hasActiveFilters ? "magnifyingglass" : "note.text")
+                        } description: {
+                            Text(hasActiveFilters ? "Try another search or show all classes." : "Record a lesson or import audio to get started.")
+                        } actions: {
+                            if hasActiveFilters {
+                                Button("Clear Filters") {
+                                    searchText = ""
+                                    selectedClassFilter = "All"
+                                }
+                            } else {
+                                Button("Create a Note") { showRecordSheet = true }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                        }
                     }
 
                     ForEach(filteredNotes) { note in
                         NavigationLink(value: note.id) {
                             noteRow(note: note)
                         }
-                        .swipeActions(edge: .trailing) {
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) {
-                                deleteNote(note)
+                                noteToDelete = note
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -80,6 +97,7 @@ public struct HomeView: View {
                                     Label("Retry", systemImage: "arrow.clockwise")
                                 }
                                 .tint(.green)
+                                .disabled(retryingNoteIds.contains(note.id))
                             }
                         }
                     }
@@ -127,6 +145,8 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: selectedClassFilter == "All" ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
+                    .accessibilityLabel("Filter by class")
+                    .accessibilityValue(selectedClassFilter)
 
                     // Classes Manager
                     Button {
@@ -134,6 +154,7 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: "folder")
                     }
+                    .accessibilityLabel("Manage classes")
 
                     // Record Note
                     Button {
@@ -141,6 +162,7 @@ public struct HomeView: View {
                     } label: {
                         Image(systemName: "mic.badge.plus")
                     }
+                    .accessibilityLabel("Record or import a note")
                 }
             }
             .sheet(isPresented: $showRecordSheet) {
@@ -150,8 +172,19 @@ public struct HomeView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showClassesSheet) {
+            .sheet(isPresented: $showClassesSheet, onDismiss: {
+                Task { await refreshAllData() }
+            }) {
                 ClassesView()
+            }
+            .confirmationDialog("Delete Note?", isPresented: Binding(
+                get: { noteToDelete != nil },
+                set: { if !$0 { noteToDelete = nil } }
+            ), titleVisibility: .visible, presenting: noteToDelete) { note in
+                Button("Delete Note", role: .destructive) { deleteNote(note) }
+                Button("Cancel", role: .cancel) { noteToDelete = nil }
+            } message: { note in
+                Text("“\(note.title)” will be permanently deleted. This cannot be undone.")
             }
             .confirmationDialog(
                 "Assign Class",
@@ -175,6 +208,11 @@ public struct HomeView: View {
             .task {
                 await refreshAllData()
                 startBackgroundPolling()
+            }
+            .onDisappear { stopBackgroundPolling() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { startBackgroundPolling() }
+                else { stopBackgroundPolling() }
             }
             .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
                 if isConnected && isNetworkUnreachable {
@@ -290,6 +328,10 @@ public struct HomeView: View {
 
     // MARK: - Computed
 
+    private var hasActiveFilters: Bool {
+        !searchText.isEmpty || selectedClassFilter != "All"
+    }
+
     private var filteredNotes: [NoteItem] {
         notes.filter { note in
             let matchesClass = selectedClassFilter == "All" || note.noteClass == selectedClassFilter
@@ -313,6 +355,9 @@ public struct HomeView: View {
 
             self.notes = fetchedNotes
             self.classes = fetchedClasses
+            if selectedClassFilter != "All", !fetchedClasses.contains(where: { $0.name == selectedClassFilter }) {
+                selectedClassFilter = "All"
+            }
             self.isLoading = false
             self.errorMessage = nil
 
@@ -328,24 +373,24 @@ public struct HomeView: View {
             let isNetwork = (error as? APIError)?.isNetworkError == true || (error as? URLError) != nil || !NetworkMonitor.shared.isConnected
 
             withAnimation(.easeInOut(duration: 0.25)) {
-                if isNetwork || notes.isEmpty {
+                if isNetwork {
                     self.isNetworkUnreachable = true
                 }
             }
 
-            if notes.isEmpty {
-                self.errorMessage = error.localizedDescription
-            }
+            self.errorMessage = error.localizedDescription
         }
     }
 
     private func startBackgroundPolling() {
-        Task {
+        pollingTask?.cancel()
+        pollingTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled else { break }
                 let hasProcessing = await MainActor.run { notes.contains { $0.isProcessing } }
                 if hasProcessing {
-                    if let updatedNotes = try? await APIClient.fetchNotes() {
+                    if let updatedNotes = try? await APIClient.fetchNotes(), !Task.isCancelled {
                         await MainActor.run {
                             self.notes = updatedNotes
                             LocalDataCache.shared.saveNotes(updatedNotes)
@@ -354,6 +399,11 @@ public struct HomeView: View {
                 }
             }
         }
+    }
+
+    private func stopBackgroundPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 
     private func deleteNote(_ note: NoteItem) {
@@ -373,6 +423,7 @@ public struct HomeView: View {
     }
 
     private func retryNote(_ note: NoteItem) {
+        guard !retryingNoteIds.contains(note.id) else { return }
         retryingNoteIds.insert(note.id)
         Task {
             do {

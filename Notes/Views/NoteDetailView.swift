@@ -15,6 +15,8 @@ public struct NoteDetailView: View {
     @State private var showClassPicker = false
     @State private var availableClasses: [UserClass]
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var pollingTask: Task<Void, Never>?
 
     public init(noteId: String) {
         self.noteId = noteId
@@ -30,7 +32,7 @@ public struct NoteDetailView: View {
             if isNetworkUnreachable {
                 NetworkBannerView(
                     message: "Internet is not reachable",
-                    onRetry: { loadData() }
+                    onRetry: { Task { await loadData(); startPollingIfNeeded() } }
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -41,11 +43,14 @@ public struct NoteDetailView: View {
             } else if let errorMessage, note == nil {
                 VStack(spacing: 12) {
                     Text(errorMessage).foregroundStyle(.red)
-                    Button("Retry") { loadData() }
+                    Button("Retry") { Task { await loadData(); startPollingIfNeeded() } }
                         .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let note {
+                if let errorMessage {
+                    Text(errorMessage).font(.callout).foregroundStyle(.red).padding(.horizontal)
+                }
                 // Header status / processing alerts
                 if note.isProcessing {
                     processingBanner
@@ -53,16 +58,25 @@ public struct NoteDetailView: View {
                     errorBanner(note: note)
                 }
 
-                // Section picker
-                Picker("Section", selection: $selectedTab) {
-                    Text("Notes").tag(0)
-                    Text("Flashcards").tag(1)
-                    Text("Quiz").tag(2)
-                    Text("Transcript").tag(3)
-                    Text("Ask AI").tag(4)
+                // Full-width labels stay readable on small screens and at large text sizes.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(["Notes", "Flashcards", "Quiz", "Transcript", "Ask AI"].enumerated()), id: \.offset) { index, title in
+                            Button { selectedTab = index } label: {
+                                Text(title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .fixedSize()
+                                    .padding(.horizontal, 16)
+                                    .frame(minHeight: 44)
+                                    .background(selectedTab == index ? Color.accentColor : Color(uiColor: .secondarySystemBackground), in: Capsule())
+                                    .foregroundStyle(selectedTab == index ? Color.white : Color.primary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(selectedTab == index ? .isSelected : [])
+                        }
+                    }
+                    .padding(.horizontal)
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
                 .padding(.vertical, 8)
 
                 // Tab Content
@@ -115,6 +129,8 @@ public struct NoteDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .accessibilityLabel("Note actions")
+                .disabled(isDeleting)
             }
         }
         .confirmationDialog("Delete Note?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
@@ -126,16 +142,22 @@ public struct NoteDetailView: View {
             Text("Are you sure you want to delete this note? This action cannot be undone.")
         }
         .refreshable {
-            loadData()
+            await loadData()
+            startPollingIfNeeded()
         }
         .task {
-            loadData()
+            await loadData()
             loadClasses()
             startPollingIfNeeded()
         }
+        .onDisappear { stopPolling() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { startPollingIfNeeded() }
+            else { stopPolling() }
+        }
         .onChange(of: NetworkMonitor.shared.isConnected) { _, isConnected in
             if isConnected && isNetworkUnreachable {
-                loadData()
+                Task { await loadData(); startPollingIfNeeded() }
             }
         }
         .animation(.easeInOut(duration: 0.25), value: isNetworkUnreachable)
@@ -265,8 +287,8 @@ public struct NoteDetailView: View {
 
     // MARK: - Actions & Polling
 
-    private func loadData() {
-        Task {
+    @MainActor
+    private func loadData() async {
             do {
                 let fetched = try await APIClient.fetchNote(id: noteId)
                 await MainActor.run {
@@ -283,16 +305,13 @@ public struct NoteDetailView: View {
                     self.isLoading = false
                     let isNetwork = (error as? APIError)?.isNetworkError == true || (error as? URLError) != nil || !NetworkMonitor.shared.isConnected
                     withAnimation(.easeInOut(duration: 0.25)) {
-                        if isNetwork || self.note != nil {
+                        if isNetwork {
                             self.isNetworkUnreachable = true
                         }
                     }
-                    if self.note == nil {
-                        self.errorMessage = error.localizedDescription
-                    }
+                    self.errorMessage = error.localizedDescription
                 }
             }
-        }
     }
 
     private func loadClasses() {
@@ -307,7 +326,8 @@ public struct NoteDetailView: View {
     }
 
     private func startPollingIfNeeded() {
-        Task {
+        pollingTask?.cancel()
+        pollingTask = Task {
             while !Task.isCancelled {
                 guard let note, note.isProcessing else { break }
 
@@ -317,7 +337,7 @@ public struct NoteDetailView: View {
                     }
                 }
 
-                if let updatedNote = try? await APIClient.fetchNote(id: noteId) {
+                if let updatedNote = try? await APIClient.fetchNote(id: noteId), !Task.isCancelled {
                     await MainActor.run {
                         self.note = updatedNote
                         LocalDataCache.shared.saveNoteDetail(updatedNote)
@@ -332,16 +352,20 @@ public struct NoteDetailView: View {
         }
     }
 
+    private func stopPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
+    }
+
     private func retryProcessing() {
+        guard !isRetrying else { return }
         isRetrying = true
         Task {
             do {
                 try await APIClient.retryNote(id: noteId)
-                await MainActor.run {
-                    isRetrying = false
-                    loadData()
-                    startPollingIfNeeded()
-                }
+                isRetrying = false
+                await loadData()
+                startPollingIfNeeded()
             } catch {
                 await MainActor.run {
                     isRetrying = false
@@ -355,7 +379,7 @@ public struct NoteDetailView: View {
         Task {
             do {
                 try await APIClient.updateNoteClass(id: noteId, noteClass: cls)
-                loadData()
+                await loadData()
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription

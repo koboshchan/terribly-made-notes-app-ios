@@ -92,7 +92,8 @@ public struct QuizQuestion: Codable, Identifiable, Hashable, Sendable {
         if !correctAnswer.isEmpty {
             options.append(correctAnswer)
         }
-        return options.shuffled()
+        var seen = Set<String>()
+        return options.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && seen.insert($0).inserted }.shuffled()
     }
 }
 
