@@ -17,6 +17,7 @@ public struct HomeView: View {
     @State private var noteToDelete: NoteItem?
     @State private var pollingTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
 
     public init() {
         let cachedNotes = LocalDataCache.shared.loadNotes() ?? []
@@ -42,6 +43,23 @@ public struct HomeView: View {
                 }
 
                 List {
+                    Section {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .center, spacing: 16) {
+                                librarySummary
+                                Spacer(minLength: 12)
+                                captureButton
+                            }
+                            VStack(alignment: .leading, spacing: 16) {
+                                librarySummary
+                                captureButton
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+
                     if let errorMessage {
                         Text(errorMessage)
                             .foregroundStyle(.red)
@@ -73,6 +91,8 @@ public struct HomeView: View {
                         NavigationLink(value: note.id) {
                             noteRow(note: note)
                         }
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(NotebookStyle.paper)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) {
                                 noteToDelete = note
@@ -102,8 +122,13 @@ public struct HomeView: View {
                         }
                     }
                 }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .listRowSpacing(10)
             }
-            .animation(.easeInOut(duration: 0.25), value: isNetworkUnreachable)
+            .background(NotebookStyle.canvas)
+            .tint(NotebookStyle.accent)
+            .animation(NotebookStyle.motion(reduced: reducedMotion), value: isNetworkUnreachable)
             .navigationDestination(for: String.self) { noteId in
                 NoteDetailView(noteId: noteId)
             }
@@ -224,10 +249,33 @@ public struct HomeView: View {
         }
     }
 
+    private var librarySummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(selectedClassFilter == "All" ? "Your library" : selectedClassFilter)
+                .font(.title3.weight(.semibold))
+            Text("\(filteredNotes.count) \(filteredNotes.count == 1 ? "note" : "notes") · Ready when you are")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var captureButton: some View {
+        Button { showRecordSheet = true } label: {
+            Label("New note", systemImage: "plus")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 16)
+                .frame(minHeight: 44)
+                .foregroundStyle(.white)
+                .background(NotebookStyle.accent, in: Capsule())
+        }
+        .buttonStyle(NotebookPressStyle())
+        .accessibilityLabel("Record or import a note")
+    }
+
     // MARK: - Row Subview
 
     private func noteRow(note: NoteItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 Text(note.title)
                     .font(.headline)
@@ -297,7 +345,7 @@ public struct HomeView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
     }
 
     private func statusBadge(note: NoteItem) -> some View {
@@ -365,14 +413,14 @@ public struct HomeView: View {
             LocalDataCache.shared.saveNotes(fetchedNotes)
             LocalDataCache.shared.saveClasses(fetchedClasses)
 
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                 self.isNetworkUnreachable = false
             }
         } catch {
             self.isLoading = false
             let isNetwork = (error as? APIError)?.isNetworkError == true || (error as? URLError) != nil || !NetworkMonitor.shared.isConnected
 
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(NotebookStyle.motion(reduced: reducedMotion)) {
                 if isNetwork {
                     self.isNetworkUnreachable = true
                 }
