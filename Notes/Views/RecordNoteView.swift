@@ -5,6 +5,8 @@ public struct RecordNoteView: View {
     let onNoteCreated: (String) -> Void
 
     @State private var isRecording = false
+    @State private var isVisible = false
+    @State private var isRequestingPermission = false
     @State private var recordedURL: URL?
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioPlayer: AVAudioPlayer?
@@ -27,6 +29,7 @@ public struct RecordNoteView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reducedMotion
 
     public init(onNoteCreated: @escaping (String) -> Void) {
         self.onNoteCreated = onNoteCreated
@@ -40,19 +43,23 @@ public struct RecordNoteView: View {
                     VStack(spacing: 20) {
                         ZStack {
                             Circle()
-                                .fill(isRecording ? Color.red.opacity(0.15) : Color.blue.opacity(0.1))
+                                .fill(isRecording ? Color.red.opacity(0.15) : NotebookStyle.accent.opacity(0.1))
                                 .frame(width: 140, height: 140)
-                                .scaleEffect(isRecording ? 1.1 : 1.0)
-                                .animation(isRecording ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isRecording)
+                                .scaleEffect(isRecording && !reducedMotion ? 1.04 : 1)
+                                .animation(NotebookStyle.motion(reduced: reducedMotion), value: isRecording)
 
                             Image(systemName: isRecording ? "waveform" : "mic.fill")
                                 .font(.system(size: 48))
-                                .foregroundStyle(isRecording ? .red : .blue)
+                                .foregroundStyle(isRecording ? Color.red : NotebookStyle.accent)
                         }
                         .padding(.top, 12)
 
                         Text(formattedTime(recordDuration))
-                            .font(.system(size: 40, weight: .semibold, design: .monospaced))
+                            .font(.largeTitle.weight(.medium).monospacedDigit())
+                        Text(isRecording ? "Recording your lesson" : (recordedURL == nil ? "Capture a thought or a whole lesson" : "Your audio is ready"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
 
                         HStack(spacing: 24) {
                             if !isRecording && recordedURL == nil {
@@ -67,6 +74,7 @@ public struct RecordNoteView: View {
                                         .background(Color.red)
                                         .clipShape(.capsule)
                                 }
+                                .disabled(isRequestingPermission)
                             } else if isRecording {
                                 Button {
                                     stopRecording()
@@ -88,6 +96,8 @@ public struct RecordNoteView: View {
                                         .font(.system(size: 44))
                                         .foregroundStyle(.blue)
                                 }
+                                .accessibilityLabel(isPlaying ? "Pause audio preview" : "Play audio preview")
+                                .disabled(isUploading)
 
                                 Button {
                                     dismissAfterDiscard = false
@@ -97,6 +107,7 @@ public struct RecordNoteView: View {
                                         .font(.subheadline)
                                 }
                                 .buttonStyle(.bordered)
+                                .disabled(isUploading)
                             }
                         }
 
@@ -117,14 +128,13 @@ public struct RecordNoteView: View {
                     }
                     .padding(24)
                     .frame(maxWidth: .infinity)
-                    .background(Color(uiColor: .secondarySystemBackground))
-                    .clipShape(.rect(cornerRadius: 16))
+                    .notebookSurface()
                     .padding(.horizontal)
 
                     // Options Card
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("OPTIONS")
-                            .font(.caption2.bold())
+                        Text("Note details")
+                            .font(.headline)
                             .foregroundStyle(.secondary)
 
                         // Language picker
@@ -153,10 +163,10 @@ public struct RecordNoteView: View {
                             }
                         }
                     }
+                    .disabled(isUploading)
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(uiColor: .secondarySystemBackground))
-                    .clipShape(.rect(cornerRadius: 16))
+                    .notebookSurface()
                     .padding(.horizontal)
 
                     if let errorMessage {
@@ -190,6 +200,8 @@ public struct RecordNoteView: View {
                 }
                 .padding(.vertical)
             }
+            .background(NotebookStyle.canvas)
+            .tint(NotebookStyle.accent)
             .navigationTitle("New Note")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -242,7 +254,9 @@ public struct RecordNoteView: View {
             .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
                 handleAudioInterruption(notification: notification)
             }
+            .onAppear { isVisible = true }
             .onDisappear {
+                isVisible = false
                 if isRecording {
                     stopRecording()
                 }
@@ -256,17 +270,26 @@ public struct RecordNoteView: View {
     // MARK: - Audio Recording Helpers
 
     private func startRecording() {
+        guard !isRequestingPermission, !isRecording else { return }
+        isRequestingPermission = true
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
             try session.setActive(true)
         } catch {
+            isRequestingPermission = false
             errorMessage = "Audio session setup failed: \(error.localizedDescription)"
             return
         }
 
-        session.requestRecordPermission { allowed in
-            DispatchQueue.main.async {
+        Task { @MainActor in
+            let allowed = await AVAudioApplication.requestRecordPermission()
+            do {
+                isRequestingPermission = false
+                guard isVisible else {
+                    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                    return
+                }
                 if allowed {
                     beginRecording()
                 } else {

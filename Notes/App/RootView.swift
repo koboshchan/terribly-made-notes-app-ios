@@ -11,16 +11,7 @@ struct RootView: View {
             if clerk.user != nil {
                 HomeView()
             } else {
-                VStack(spacing: 16) {
-                    Text("Notes")
-                        .font(.largeTitle.bold())
-                    Text("Record audio. Get summaries, flashcards, and quizzes.")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                    Button("Sign in") { authIsPresented = true }
-                        .buttonStyle(.borderedProminent)
-                }
+                WelcomeView { authIsPresented = true }
             }
         }
         .sheet(isPresented: $authIsPresented) {

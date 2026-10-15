@@ -19,6 +19,15 @@ schemes:
     archive:
       config: Release
 
+  NotesQAHost:
+    build:
+      targets:
+        NotesQAHost: all
+    test:
+      targets:
+        - NotesQAUnit
+        - NotesQAUI
+
 packages:
   Clerk:
     url: https://github.com/clerk/clerk-ios
@@ -92,3 +101,58 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 9L8K7C9GMH
         CODE_SIGN_ENTITLEMENTS: NotesShare/NotesShare.entitlements
+
+  NotesQAHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tests/QAHost
+      - path: Notes/Models/Note.swift
+      - path: Notes/Models/NoteProgress.swift
+      - path: Notes/Models/UserClass.swift
+      - path: Notes/Models/ChatMessage.swift
+      - path: Notes/Components
+      - path: Notes/Storage
+      - path: Notes/Networking/NetworkMonitor.swift
+      - path: Notes/Views/WelcomeView.swift
+      - path: Notes/Views/NoteDetailView.swift
+      - path: Notes/Views/RecordNoteView.swift
+      - path: Notes/Views/ClassesView.swift
+      - path: Notes/Views/FlashcardsView.swift
+      - path: Notes/Views/QuizView.swift
+      - path: Notes/Views/TranscriptView.swift
+      - path: Notes/Views/AskAIView.swift
+    dependencies:
+      - package: WKMarkdownView
+        product: WKMarkdownView
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobosh.notes.pr3-qa
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Record disposable QA audio."
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+
+  NotesQAUI:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests/QAUI]
+    dependencies:
+      - target: NotesQAHost
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
+
+  NotesQAUnit:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/QAUnit
+      - path: Notes/Models/Note.swift
+      - path: Notes/Models/UserClass.swift
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
