@@ -105,7 +105,7 @@ public enum APIClient {
         }
     }
 
-    private static func sendVoid(_ request: URLRequest) async throws {
+    private static func sendVoid(_ request: URLRequest, unsupportedMessage: String? = nil) async throws {
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: request)
@@ -119,6 +119,9 @@ public enum APIClient {
             throw APIError.invalidResponse
         }
 
+        if http.statusCode == 405, let unsupportedMessage {
+            throw APIError.server(unsupportedMessage)
+        }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? decoder.decode(APIErrorPayload.self, from: data))?.error
             throw APIError.server(message ?? "Request failed (HTTP \(http.statusCode))")
@@ -203,6 +206,24 @@ public enum APIClient {
         let body: [String: String?] = ["class": noteClass]
         request.httpBody = try encoder.encode(body)
         try await sendVoid(request)
+    }
+
+    // Verified against web main (GET/POST) and web PR #4 (DELETE).
+    static func fetchShare(id: String) async throws -> NoteShareInfo {
+        try await send(try await authorizedRequest(path: "/api/notes/\(id)/share"))
+    }
+
+    static func createShare(id: String) async throws -> NoteShareInfo {
+        var request = try await authorizedRequest(path: "/api/notes/\(id)/share", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Public readers never receive permission to spend the owner's AI quota.
+        request.httpBody = try encoder.encode(["allowChat": false])
+        return try await send(request)
+    }
+
+    static func deleteShare(id: String) async throws {
+        let request = try await authorizedRequest(path: "/api/notes/\(id)/share", method: "DELETE")
+        try await sendVoid(request, unsupportedMessage: "This server needs the sharing update before links can be disabled. The link may still be public.")
     }
 
     public static func fetchTranscript(id: String) async throws -> String {
