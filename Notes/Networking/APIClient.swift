@@ -277,7 +277,7 @@ public enum APIClient {
     public static func createClass(name: String, description: String? = nil) async throws -> UserClass {
         var request = try await authorizedRequest(path: "/api/user/classes", method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String?] = ["name": name, "description": description]
+        let body = ClassCreateRequest(name: name, description: description)
         request.httpBody = try encoder.encode(body)
         return try await send(request)
     }

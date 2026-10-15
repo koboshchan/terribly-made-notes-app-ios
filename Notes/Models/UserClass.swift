@@ -12,3 +12,16 @@ public struct UserClass: Codable, Identifiable, Hashable, Sendable {
         self.description = description
     }
 }
+
+/// Omits absent descriptions instead of encoding JSON null, which the API rejects.
+struct ClassCreateRequest: Encodable {
+    let name: String
+    let description: String?
+
+    init(name: String, description: String?) {
+        self.name = name
+        self.description = description.flatMap {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+        }
+    }
+}

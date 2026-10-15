@@ -32,7 +32,12 @@ public struct ClassesView: View {
                 }
 
                 ForEach(classes) { cls in
-                    VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 16) {
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(NotebookStyle.accent)
+                            .font(.title2)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 6) {
                         Text(cls.name)
                             .font(.headline)
                         if let desc = cls.description, !desc.isEmpty {
@@ -40,7 +45,9 @@ public struct ClassesView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
+                        }
                     }
+                    .padding(.vertical, 10)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {
                             classToDelete = cls
@@ -50,6 +57,9 @@ public struct ClassesView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(NotebookStyle.canvas)
+            .tint(NotebookStyle.accent)
             .navigationTitle("Manage Classes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
