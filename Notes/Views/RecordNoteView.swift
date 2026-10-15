@@ -5,6 +5,8 @@ public struct RecordNoteView: View {
     let onNoteCreated: (String) -> Void
 
     @State private var isRecording = false
+    @State private var isVisible = false
+    @State private var isRequestingPermission = false
     @State private var recordedURL: URL?
     @State private var audioRecorder: AVAudioRecorder?
     @State private var audioPlayer: AVAudioPlayer?
@@ -72,6 +74,7 @@ public struct RecordNoteView: View {
                                         .background(Color.red)
                                         .clipShape(.capsule)
                                 }
+                                .disabled(isRequestingPermission)
                             } else if isRecording {
                                 Button {
                                     stopRecording()
@@ -93,6 +96,8 @@ public struct RecordNoteView: View {
                                         .font(.system(size: 44))
                                         .foregroundStyle(.blue)
                                 }
+                                .accessibilityLabel(isPlaying ? "Pause audio preview" : "Play audio preview")
+                                .disabled(isUploading)
 
                                 Button {
                                     dismissAfterDiscard = false
@@ -102,6 +107,7 @@ public struct RecordNoteView: View {
                                         .font(.subheadline)
                                 }
                                 .buttonStyle(.bordered)
+                                .disabled(isUploading)
                             }
                         }
 
@@ -157,6 +163,7 @@ public struct RecordNoteView: View {
                             }
                         }
                     }
+                    .disabled(isUploading)
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .notebookSurface()
@@ -247,7 +254,9 @@ public struct RecordNoteView: View {
             .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
                 handleAudioInterruption(notification: notification)
             }
+            .onAppear { isVisible = true }
             .onDisappear {
+                isVisible = false
                 if isRecording {
                     stopRecording()
                 }
@@ -261,17 +270,26 @@ public struct RecordNoteView: View {
     // MARK: - Audio Recording Helpers
 
     private func startRecording() {
+        guard !isRequestingPermission, !isRecording else { return }
+        isRequestingPermission = true
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
             try session.setActive(true)
         } catch {
+            isRequestingPermission = false
             errorMessage = "Audio session setup failed: \(error.localizedDescription)"
             return
         }
 
-        session.requestRecordPermission { allowed in
-            DispatchQueue.main.async {
+        Task { @MainActor in
+            let allowed = await AVAudioApplication.requestRecordPermission()
+            do {
+                isRequestingPermission = false
+                guard isVisible else {
+                    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                    return
+                }
                 if allowed {
                     beginRecording()
                 } else {
