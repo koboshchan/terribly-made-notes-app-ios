@@ -103,6 +103,8 @@ public struct AskAIView: View {
                         .font(.system(size: 32))
                         .foregroundStyle(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading ? Color.secondary : Color.blue)
                 }
+                .accessibilityLabel("Send message")
+                .frame(minWidth: 44, minHeight: 44)
                 .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLoading)
             }
             .padding()
@@ -168,7 +170,7 @@ public struct AskAIView: View {
 
     private func sendMessage() {
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !isLoading else { return }
 
         let userMessage = ChatMessage(role: "user", content: trimmed)
         messages.append(userMessage)
