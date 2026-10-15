@@ -12,6 +12,7 @@ public struct NoteDetailView: View {
     @State private var isRetrying = false
     @State private var isDeleting = false
     @State private var showDeleteConfirmation = false
+    @State private var showShare = false
     @State private var showClassPicker = false
     @State private var availableClasses: [UserClass]
     @Environment(\.dismiss) private var dismiss
@@ -103,6 +104,9 @@ public struct NoteDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if note != nil {
+                    Button("Share Note", systemImage: "square.and.arrow.up") { showShare = true }
+                }
                 Menu {
                     if !availableClasses.isEmpty {
                         Menu("Assign Class") {
@@ -132,6 +136,9 @@ public struct NoteDetailView: View {
                 .accessibilityLabel("Note actions")
                 .disabled(isDeleting)
             }
+        }
+        .sheet(isPresented: $showShare) {
+            if let note { NoteShareView(note: note) }
         }
         .confirmationDialog("Delete Note?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete Note", role: .destructive) {

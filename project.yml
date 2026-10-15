@@ -19,6 +19,16 @@ schemes:
     archive:
       config: Release
 
+  NotesSharingTests:
+    build:
+      targets:
+        Notes: all
+        NotesSharingHost: all
+    test:
+      targets:
+        - NotesTests
+        - NotesSharingUITests
+
 packages:
   Clerk:
     url: https://github.com/clerk/clerk-ios
@@ -92,3 +102,43 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 9L8K7C9GMH
         CODE_SIGN_ENTITLEMENTS: NotesShare/NotesShare.entitlements
+
+  NotesTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [NotesTests]
+    dependencies:
+      - target: Notes
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
+
+  NotesSharingHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tests/SharingHost
+      - path: Notes/Models/Note.swift
+      - path: Notes/Models/NoteShareInfo.swift
+      - path: Notes/Models/NoteSharingModel.swift
+      - path: Notes/Models/NoteMarkdownExport.swift
+      - path: Notes/Views/NoteShareView.swift
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobosh.notes.sharing-test-host
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+
+  NotesSharingUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [NotesUITests]
+    dependencies:
+      - target: NotesSharingHost
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: true
